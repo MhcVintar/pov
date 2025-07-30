@@ -6,71 +6,146 @@
 //
 
 import SwiftUI
+import GPUImage
 
 struct ContentView: View {
     @State private var selectedFilePath: String = "No file selected"
-    @State private var showingFilePicker = false
+    @State private var selectedVideoURL: URL?
+    @State private var isProcessing = false
+    @State private var processingComplete = false
     
     var body: some View {
         VStack(spacing: 20) {
-            Text("File Picker Demo")
+            Text("GPUImage3 Video Gaussian Filter")
                 .font(.title)
                 .fontWeight(.bold)
             
-            Button("Choose File") {
+            Button("Choose Video File") {
                 openFileDialog()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Selected File Path:")
-                    .font(.headline)
-                
-                ScrollView {
-                    Text(selectedFilePath)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(8)
-                }
-                .frame(maxHeight: 100)
-            }
-            
             if selectedFilePath != "No file selected" {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Selected File:")
+                        .font(.headline)
+                    
+                    Text(selectedFilePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .padding(8)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                }
+                
+                Button(isProcessing ? "Processing..." : "Process & Save Video") {
+                    processAndSaveVideo()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedVideoURL == nil || isProcessing)
+                
+                if processingComplete {
+                    Text("✓ Video processed and saved successfully!")
+                        .foregroundColor(.green)
+                        .font(.headline)
+                }
+                
                 Button("Clear Selection") {
-                    selectedFilePath = "No file selected"
+                    clearSelection()
                 }
                 .buttonStyle(.bordered)
             }
         }
         .padding(30)
-        .frame(minWidth: 400, minHeight: 200)
+        .frame(minWidth: 400, minHeight: 250)
     }
     
     private func openFileDialog() {
         let panel = NSOpenPanel()
         
-        // Configure the file dialog
-        panel.title = "Choose a file"
+        // Configure the file dialog for videos
+        panel.title = "Choose a video file"
         panel.showsHiddenFiles = false
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        
-        // Optional: Set allowed file types
-        // panel.allowedContentTypes = [.text, .image, .pdf]
+        panel.allowedContentTypes = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
         
         // Show the dialog
         panel.begin { response in
             if response == .OK {
                 if let url = panel.url {
                     selectedFilePath = url.path
+                    selectedVideoURL = url
+                    processingComplete = false // Reset completion state
                 }
             }
         }
+    }
+    
+    private func processAndSaveVideo() {
+        guard let inputVideoURL = selectedVideoURL else { return }
+        
+        // First show save dialog to get the output path
+        let savePanel = NSSavePanel()
+        savePanel.title = "Save Processed Video"
+        savePanel.allowedContentTypes = [.quickTimeMovie, .mpeg4Movie]
+        savePanel.nameFieldStringValue = "gaussian_video.mov"
+        
+        savePanel.begin { response in
+            guard response == .OK, let outputURL = savePanel.url else { return }
+            
+            self.isProcessing = true
+            self.processingComplete = false
+            
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.processVideo(inputURL: inputVideoURL, outputURL: outputURL)
+            }
+        }
+    }
+    
+    private func processVideo(inputURL: URL, outputURL: URL) {
+        do {
+            // Create movie input from URL
+            let movieInput = try MovieInput(url: inputURL)
+            
+            // Create movie output to URL
+            let movieOutput = try MovieOutput(URL: outputURL, size: Size(width: 1440, height: 1080), fileType: .mov, liveVideo: false)
+            
+            // Create gaussian blur
+            let gaussianBlur = GaussianBlur()
+            
+            // Set up the processing chain
+            movieInput --> gaussianBlur --> movieOutput
+            
+            // Start processing
+            movieInput.runBenchmark = true
+            movieOutput.startRecording()
+            movieInput.start()
+            
+            // Wait for completion (in real implementation you might want to handle this differently)
+            movieOutput.finishRecording {
+                DispatchQueue.main.async {
+                    self.isProcessing = false
+                    self.processingComplete = true
+                }
+            }
+            
+        } catch {
+            print("Error processing video: \(error)")
+            DispatchQueue.main.async {
+                self.isProcessing = false
+            }
+        }
+    }
+    
+    private func clearSelection() {
+        selectedFilePath = "No file selected"
+        selectedVideoURL = nil
+        processingComplete = false
     }
 }
 
