@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		A9C638022E38097C007EE24A /* GPUImage in Frameworks */ = {isa = PBXBuildFile; productRef = A9C638012E38097C007EE24A /* GPUImage */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		A9C637EA2E3804A3007EE24A /* POV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = POV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -27,7 +23,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A9C638022E38097C007EE24A /* GPUImage in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,7 +65,6 @@
 			);
 			name = POV;
 			packageProductDependencies = (
-				A9C638012E38097C007EE24A /* GPUImage */,
 			);
 			productName = POV;
 			productReference = A9C637EA2E3804A3007EE24A /* POV.app */;
@@ -335,13 +329,6 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		A9C638012E38097C007EE24A /* GPUImage */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = GPUImage;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A9C637E22E3804A3007EE24A /* Project object */;
 }

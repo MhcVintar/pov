@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import GPUImage
 
 struct ContentView: View {
     @State private var selectedFilePath: String = "No file selected"
@@ -93,7 +92,7 @@ struct ContentView: View {
         let savePanel = NSSavePanel()
         savePanel.title = "Save Processed Video"
         savePanel.allowedContentTypes = [.quickTimeMovie, .mpeg4Movie]
-        savePanel.nameFieldStringValue = "gaussian_video.mov"
+        savePanel.nameFieldStringValue = "processed.mov"
         
         savePanel.begin { response in
             guard response == .OK, let outputURL = savePanel.url else { return }
@@ -108,36 +107,14 @@ struct ContentView: View {
     }
     
     private func processVideo(inputURL: URL, outputURL: URL) {
-        do {
-            // Create movie input from URL
-            let movieInput = try MovieInput(url: inputURL)
-            
-            // Create movie output to URL
-            let movieOutput = try MovieOutput(URL: outputURL, size: Size(width: 1440, height: 1080), fileType: .mov, liveVideo: false)
-            
-            // Create gaussian blur
-            let gaussianBlur = GaussianBlur()
-            
-            // Set up the processing chain
-            movieInput --> gaussianBlur --> movieOutput
-            
-            // Start processing
-            movieInput.runBenchmark = true
-            movieOutput.startRecording()
-            movieInput.start()
-            
-            // Wait for completion (in real implementation you might want to handle this differently)
-            movieOutput.finishRecording {
-                DispatchQueue.main.async {
-                    self.isProcessing = false
-                    self.processingComplete = true
-                }
-            }
-            
-        } catch {
-            print("Error processing video: \(error)")
+        let converterController = VideoConverterViewController()
+        converterController.setupConverter()
+        
+        Task {
+            await converterController.convertVideo(inputPath: inputURL.path, outputPath: outputURL.path)
             DispatchQueue.main.async {
                 self.isProcessing = false
+                self.processingComplete = true
             }
         }
     }
