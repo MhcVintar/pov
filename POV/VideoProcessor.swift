@@ -82,7 +82,7 @@ class VideoAspectRatioConverter {
         // Setup reader
         let reader = try AVAssetReader(asset: asset)
         let readerOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey as String: true
         ])
         reader.add(readerOutput)
@@ -108,7 +108,7 @@ class VideoAspectRatioConverter {
         let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey as String: outputSize.width,
                 kCVPixelBufferHeightKey as String: outputSize.height,
                 kCVPixelBufferMetalCompatibilityKey as String: true
@@ -194,7 +194,7 @@ class VideoAspectRatioConverter {
             kCFAllocatorDefault,
             Int(outputSize.width),
             Int(outputSize.height),
-            kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+            kCVPixelFormatType_32BGRA,
             [
                 kCVPixelBufferMetalCompatibilityKey: true,
                 kCVPixelBufferIOSurfacePropertiesKey: [:]
@@ -252,7 +252,7 @@ class VideoAspectRatioConverter {
             textureCache,
             pixelBuffer,
             nil,
-            .bgr10a2Unorm,
+            .bgra8Unorm,
             width,
             height,
             0,

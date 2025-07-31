@@ -16,9 +16,9 @@ float computeX(float tx, float inWidth, float outWidth) {
 }
 
 kernel void superview(texture2d<float, access::sample> inTexture [[texture(0)]],
-                            texture2d<float, access::write> outTexture [[texture(1)]],
-                            sampler texSampler [[sampler(0)]],
-                             uint2 gid [[thread_position_in_grid]]) {
+                      texture2d<float, access::write> outTexture [[texture(1)]],
+                      sampler texSampler [[sampler(0)]],
+                      uint2 gid [[thread_position_in_grid]]) {
     const float inX = computeX(float(gid.x),
                                float(inTexture.get_width()),
                                float(outTexture.get_width()));
