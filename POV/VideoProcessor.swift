@@ -56,6 +56,11 @@ class VideoAspectRatioConverter {
             throw VideoConverterError.noVideoTrack
         }
         
+        // Get audio track
+        guard let audioTrack = try await asset.loadTracks(withMediaType: .audio).first else {
+            throw VideoConverterError.noAudioTrack
+        }
+        
         // Load original video properties
         let naturalSize = try await videoTrack.load(.naturalSize)
         let transform = try await videoTrack.load(.preferredTransform)
@@ -81,11 +86,15 @@ class VideoAspectRatioConverter {
         
         // Setup reader
         let reader = try AVAssetReader(asset: asset)
-        let readerOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
+        
+        let videoReaderOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey as String: true
         ])
-        reader.add(readerOutput)
+        reader.add(videoReaderOutput)
+        
+        let audioReaderOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+        reader.add(audioReaderOutput)
         
         // Setup writer with original video properties
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
@@ -97,16 +106,16 @@ class VideoAspectRatioConverter {
             AVVideoExpectedSourceFrameRateKey: originalFrameRate
         ]
         
-        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
+        let videoWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: outputSize.width,
             AVVideoHeightKey: outputSize.height,
             AVVideoCompressionPropertiesKey: compressionProperties
         ])
-        writerInput.expectsMediaDataInRealTime = false
+        videoWriterInput.expectsMediaDataInRealTime = false
         
         let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: writerInput,
+            assetWriterInput: videoWriterInput,
             sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey as String: outputSize.width,
@@ -115,7 +124,10 @@ class VideoAspectRatioConverter {
             ]
         )
         
-        writer.add(writerInput)
+        writer.add(videoWriterInput)
+        
+        let audioWriterInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+        writer.add(audioWriterInput)
         
         // Start reading and writing
         guard reader.startReading() else {
@@ -133,44 +145,73 @@ class VideoAspectRatioConverter {
         let totalFrames = Int(duration.seconds * Double(originalFrameRate))
         var processedFrames = 0
         
-        // Process frames
-        while reader.status == .reading {
-            if writerInput.isReadyForMoreMediaData {
-                guard let sampleBuffer = readerOutput.copyNextSampleBuffer() else {
-                    break
-                }
-                
-                guard let inputPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                    continue
-                }
-                
-                let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                
-                do {
-                    let outputPixelBuffer = try await processFrame(
-                        inputPixelBuffer: inputPixelBuffer,
-                        outputSize: outputSize
-                    )
-                    
-                    if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
-                        print("Failed to append pixel buffer at time: \(presentationTime)")
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            
+            // Process video frames
+            group.addTask {
+                while reader.status == .reading {
+                    if videoWriterInput.isReadyForMoreMediaData {
+                        guard let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() else {
+                            break
+                        }
+                        
+                        guard let inputPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                            continue
+                        }
+                        
+                        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                        
+                        let outputPixelBuffer = try await self.processFrame(
+                            inputPixelBuffer: inputPixelBuffer,
+                            outputSize: outputSize
+                        )
+                        
+                        if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
+                            print("Failed to append pixel buffer at time: \(presentationTime)")
+                        }
+                        
+                        processedFrames += 1
+                        let progress = Float(processedFrames) / Float(totalFrames)
+                        await MainActor.run {
+                            progressCallback(min(progress, 1.0))
+                        }
+                        
+                    } else {
+                        // Wait a bit if writer isn't ready
+                        try await Task.sleep(nanoseconds: 10_000_000) // 10ms
                     }
-                    
-                    processedFrames += 1
-                    let progress = Float(processedFrames) / Float(totalFrames)
-                    progressCallback(min(progress, 1.0))
-                    
-                } catch {
-                    print("Failed to process frame: \(error)")
                 }
-            } else {
-                // Wait a bit if writer isn't ready
-                try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                
+                videoWriterInput.markAsFinished()
             }
+            
+            // Process audio samples if audio track exists
+            group.addTask {
+                while reader.status == .reading {
+                    if audioWriterInput.isReadyForMoreMediaData {
+                        guard let sampleBuffer = audioReaderOutput.copyNextSampleBuffer() else {
+                            break
+                        }
+                        
+                        if !audioWriterInput.append(sampleBuffer) {
+                            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                            print("Failed to append audio sample at time: \(presentationTime)")
+                        }
+                        
+                    } else {
+                        // Wait a bit if writer isn't ready
+                        try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                    }
+                }
+                
+                audioWriterInput.markAsFinished()
+            }
+            
+            // Wait for all tasks to complete
+            try await group.waitForAll()
         }
         
         // Finish writing
-        writerInput.markAsFinished()
         await writer.finishWriting()
         
         if let error = writer.error {
@@ -270,6 +311,7 @@ class VideoAspectRatioConverter {
 enum VideoConverterError: Error, LocalizedError {
     case metalSetupFailed(String)
     case noVideoTrack
+    case noAudioTrack
     case readerFailed(String)
     case writerFailed(String)
     case textureCreationFailed(String)
@@ -282,6 +324,8 @@ enum VideoConverterError: Error, LocalizedError {
             return "Metal setup failed: \(message)"
         case .noVideoTrack:
             return "No video track found in input file"
+        case .noAudioTrack:
+            return "No audio track found in input file"
         case .readerFailed(let message):
             return "Video reader failed: \(message)"
         case .writerFailed(let message):
