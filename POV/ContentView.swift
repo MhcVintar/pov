@@ -104,6 +104,12 @@ struct ContentView: View {
                 let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
                 let duration = try await asset.load(.duration)
                 
+                // Parse file name
+                let name = url.deletingPathExtension().lastPathComponent
+                let ext = url.pathExtension
+                var shortName = name.count > 15 ? String(name.prefix(15)) + "..." : name
+                shortName = "\(shortName).\(ext)"
+                
                 // Calculate actual dimensions considering transform
                 let transformedSize = naturalSize.applying(transform)
                 let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
@@ -111,6 +117,7 @@ struct ContentView: View {
                 
                 await MainActor.run {
                     self.videoInfo = VideoInfo(
+                        name: shortName,
                         resolution: inputSize,
                         outputSize: outputSize,
                         duration: duration.seconds,
@@ -249,8 +256,6 @@ struct FileSelectedView: View {
         VStack(spacing: 20) {
             // File info section
             VStack(alignment: .center, spacing: 12) {
-                FilePathView(selectedFilePath: selectedFilePath)
-                
                 if let info = videoInfo {
                     VideoInfoView(videoInfo: info)
                 }
@@ -367,26 +372,6 @@ struct CompletedView: View {
 
 // MARK: - Subviews
 
-struct FilePathView: View {
-    let selectedFilePath: String
-    
-    var body: some View {
-        VStack(alignment: .center, spacing: 8) {
-            Text("Selected File:")
-                .font(.headline)
-            
-            Text(selectedFilePath)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .padding(8)
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(6)
-        }
-    }
-}
-
 struct VideoInfoView: View {
     let videoInfo: VideoInfo
     
@@ -396,6 +381,7 @@ struct VideoInfoView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
             
+            InfoRow(label: "Name:", value: "\(videoInfo.name)")
             InfoRow(label: "Resolution:", value: "\(Int(videoInfo.resolution.width)) × \(Int(videoInfo.resolution.height))")
             InfoRow(label: "Duration:", value: formatDuration(videoInfo.duration))
             InfoRow(label: "Frame Rate:", value: "\(String(format: "%.1f", videoInfo.frameRate)) fps")
@@ -439,6 +425,7 @@ struct InfoRow: View {
 }
 
 struct VideoInfo {
+    let name: String
     let resolution: CGSize
     let outputSize: CGSize
     let duration: Double
