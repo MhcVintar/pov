@@ -5,6 +5,13 @@
 //  Created by Miha Vintar on 31. 7. 25.
 //
 
+//
+//  VideoProcessor.swift
+//  POV
+//
+//  Created by Miha Vintar on 31. 7. 25.
+//
+
 import AVFoundation
 import Metal
 import MetalKit
@@ -69,26 +76,31 @@ class VideoAspectRatioConverter {
         
         // Calculate actual dimensions considering transform
         let transformedSize = naturalSize.applying(transform)
-        let inputSize = CGSize(width: transformedSize.width, height: transformedSize.height)
+        let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
         
         // Calculate output size (convert 4:3 to 16:9)
         let outputSize = CGSize(width: inputSize.height * 16/9, height: inputSize.height)
         
         // Extract additional video properties for accurate reproduction
-        let originalBitrate = estimatedDataRate > 0 ? Int(estimatedDataRate) : 5_000_000 // Fallback to 5Mbps
-        let originalFrameRate = nominalFrameRate > 0 ? nominalFrameRate : 30.0 // Fallback to 30fps
+        let originalBitrate = estimatedDataRate > 0 ? Int(estimatedDataRate) : 8_000_000 // Higher fallback for 10-bit
+        let originalFrameRate = nominalFrameRate > 0 ? nominalFrameRate : 30.0
+        
+        // Calculate bitrate accounting for resolution increase and 10-bit content
+        let resolutionRatio = (outputSize.width * outputSize.height) / (inputSize.width * inputSize.height)
+        let targetBitrate = Int(Double(originalBitrate) * resolutionRatio * 1.15) // 15% overhead for new content
         
         print("Original video properties:")
         print("- Frame rate: \(originalFrameRate) fps")
         print("- Estimated bitrate: \(originalBitrate) bps")
+        print("- Target bitrate: \(targetBitrate) bps")
         print("- Input size: \(inputSize)")
         print("- Output size: \(outputSize)")
         
-        // Setup reader
+        // Setup reader with YUV420 10-bit format preservation
         let reader = try AVAssetReader(asset: asset)
         
         let videoReaderOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
             kCVPixelBufferMetalCompatibilityKey as String: true
         ])
         reader.add(videoReaderOutput)
@@ -96,20 +108,20 @@ class VideoAspectRatioConverter {
         let audioReaderOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
         reader.add(audioReaderOutput)
         
-        // Setup writer with original video properties
+        // Setup writer with 10-bit HEVC encoding
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
         
-        // Create compression properties that match the original video
+        // Create compression properties optimized for 10-bit content
         let compressionProperties: [String: Any] = [
-            AVVideoAverageBitRateKey: Int(Double(originalBitrate) * 1.333333333),
+            AVVideoAverageBitRateKey: targetBitrate,
             AVVideoProfileLevelKey: "HEVC_Main10_AutoLevel",
-            AVVideoExpectedSourceFrameRateKey: originalFrameRate
+            AVVideoExpectedSourceFrameRateKey: originalFrameRate,
         ]
         
         let videoWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.hevc,
-            AVVideoWidthKey: outputSize.width,
-            AVVideoHeightKey: outputSize.height,
+            AVVideoWidthKey: Int(outputSize.width),
+            AVVideoHeightKey: Int(outputSize.height),
             AVVideoCompressionPropertiesKey: compressionProperties
         ])
         videoWriterInput.expectsMediaDataInRealTime = false
@@ -117,9 +129,9 @@ class VideoAspectRatioConverter {
         let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoWriterInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: outputSize.width,
-                kCVPixelBufferHeightKey as String: outputSize.height,
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                kCVPixelBufferWidthKey as String: Int(outputSize.width),
+                kCVPixelBufferHeightKey as String: Int(outputSize.height),
                 kCVPixelBufferMetalCompatibilityKey as String: true
             ]
         )
@@ -185,7 +197,7 @@ class VideoAspectRatioConverter {
                 videoWriterInput.markAsFinished()
             }
             
-            // Process audio samples if audio track exists
+            // Process audio samples
             group.addTask {
                 while reader.status == .reading {
                     if audioWriterInput.isReadyForMoreMediaData {
@@ -224,18 +236,19 @@ class VideoAspectRatioConverter {
     }
     
     private func processFrame(inputPixelBuffer: CVPixelBuffer, outputSize: CGSize) async throws -> CVPixelBuffer {
-        // Create input texture
-        guard let inputTexture = createTexture(from: inputPixelBuffer) else {
-            throw VideoConverterError.textureCreationFailed("Failed to create input texture")
+        // Create input textures for YUV420 10-bit (bi-planar)
+        guard let yTexture = createYTexture(from: inputPixelBuffer),
+              let uvTexture = createUVTexture(from: inputPixelBuffer) else {
+            throw VideoConverterError.textureCreationFailed("Failed to create input YUV textures")
         }
         
-        // Create output pixel buffer
+        // Create output pixel buffer in YUV420 10-bit format
         var outputPixelBuffer: CVPixelBuffer?
         let result = CVPixelBufferCreate(
             kCFAllocatorDefault,
             Int(outputSize.width),
             Int(outputSize.height),
-            kCVPixelFormatType_32BGRA,
+            kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
             [
                 kCVPixelBufferMetalCompatibilityKey: true,
                 kCVPixelBufferIOSurfacePropertiesKey: [:]
@@ -247,9 +260,10 @@ class VideoAspectRatioConverter {
             throw VideoConverterError.pixelBufferCreationFailed
         }
         
-        // Create output texture
-        guard let outputTexture = createTexture(from: outputBuffer) else {
-            throw VideoConverterError.textureCreationFailed("Failed to create output texture")
+        // Create output textures
+        guard let outputYTexture = createYTexture(from: outputBuffer),
+              let outputUVTexture = createUVTexture(from: outputBuffer) else {
+            throw VideoConverterError.textureCreationFailed("Failed to create output YUV textures")
         }
         
         // Execute Metal shader
@@ -259,14 +273,16 @@ class VideoAspectRatioConverter {
         }
         
         encoder.setComputePipelineState(computePipelineState)
-        encoder.setTexture(inputTexture, index: 0)
-        encoder.setTexture(outputTexture, index: 1)
+        encoder.setTexture(yTexture, index: 0)      // Input Y plane
+        encoder.setTexture(uvTexture, index: 1)     // Input UV plane
+        encoder.setTexture(outputYTexture, index: 2) // Output Y plane
+        encoder.setTexture(outputUVTexture, index: 3) // Output UV plane
         
-        // Calculate thread groups
+        // Calculate thread groups based on output Y texture size
         let threadsPerThreadgroup = MTLSize(width: 16, height: 16, depth: 1)
         let threadgroupsPerGrid = MTLSize(
-            width: (outputTexture.width + threadsPerThreadgroup.width - 1) / threadsPerThreadgroup.width,
-            height: (outputTexture.height + threadsPerThreadgroup.height - 1) / threadsPerThreadgroup.height,
+            width: (outputYTexture.width + threadsPerThreadgroup.width - 1) / threadsPerThreadgroup.width,
+            height: (outputYTexture.height + threadsPerThreadgroup.height - 1) / threadsPerThreadgroup.height,
             depth: 1
         )
         
@@ -283,9 +299,9 @@ class VideoAspectRatioConverter {
         return outputBuffer
     }
     
-    private func createTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+    private func createYTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
         
         var texture: CVMetalTexture?
         let result = CVMetalTextureCacheCreateTextureFromImage(
@@ -293,10 +309,34 @@ class VideoAspectRatioConverter {
             textureCache,
             pixelBuffer,
             nil,
-            .bgra8Unorm,
+            .r16Unorm, // 10-bit Y plane uses 16-bit format
             width,
             height,
-            0,
+            0, // Y plane index
+            &texture
+        )
+        
+        guard result == kCVReturnSuccess, let cvTexture = texture else {
+            return nil
+        }
+        
+        return CVMetalTextureGetTexture(cvTexture)
+    }
+    
+    private func createUVTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1)
+        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1)
+        
+        var texture: CVMetalTexture?
+        let result = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .rg16Unorm, // 10-bit UV plane uses 16-bit format
+            width,
+            height,
+            1, // UV plane index
             &texture
         )
         
@@ -352,7 +392,7 @@ class VideoConverterViewController {
         do {
             converter = try VideoAspectRatioConverter(
                 metalDevice: device,
-                shaderFunctionName: "superview" // Replace with your shader function name
+                shaderFunctionName: "superview"
             )
         } catch {
             print("Failed to create converter: \(error)")

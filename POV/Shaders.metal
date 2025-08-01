@@ -10,18 +10,44 @@ using namespace metal;
 
 float computeX(float tx, float inWidth, float outWidth) {
     const float x = (tx / outWidth - 0.5) * 2.0;
-    const float sx = tx - (outWidth -  inWidth) / 2.0;
+    const float sx = tx - (outWidth - inWidth) / 2.0;
     const float offset = pow(x, 2) * sign(x) * ((outWidth - inWidth) / 2.0);
     return sx - offset;
 }
 
-kernel void superview(texture2d<float, access::sample> inTexture [[texture(0)]],
-                      texture2d<float, access::write> outTexture [[texture(1)]],
-                      sampler texSampler [[sampler(0)]],
+kernel void superview(texture2d<half, access::read> inputY [[texture(0)]],
+                      texture2d<half, access::read> inputUV [[texture(1)]],
+                      texture2d<half, access::write> outputY [[texture(2)]],
+                      texture2d<half, access::write> outputUV [[texture(3)]],
                       uint2 gid [[thread_position_in_grid]]) {
-    const float inX = computeX(float(gid.x),
-                               float(inTexture.get_width()),
-                               float(outTexture.get_width()));
-
-    outTexture.write(inTexture.read(uint2(inX, gid.y)), gid);
+    uint2 inputSize = uint2(inputY.get_width(), inputY.get_height());
+    uint2 outputSize = uint2(outputY.get_width(), outputY.get_height());
+    
+    half yValue, uValue, vValue;
+    
+    // Use your computeX function to apply the superview transformation
+    const float transformedX = computeX(float(gid.x),
+                                       float(inputSize.x),
+                                       float(outputSize.x));
+    
+    // Sample Y plane
+    uint2 inputCoord = uint2(uint(transformedX), gid.y);
+    yValue = inputY.read(inputCoord).r;
+    
+    // Sample UV plane (chroma is subsampled by 2)
+    uint2 chromaCoord = uint2(inputCoord.x / 2, inputCoord.y / 2);
+    half2 uvValues = inputUV.read(chromaCoord).rg;
+    uValue = uvValues.r;
+    vValue = uvValues.g;
+    
+    // Write Y plane
+    outputY.write(half4(yValue, 0, 0, 1), gid);
+    
+    // Write UV plane (only for even coordinates since chroma is subsampled)
+    if (gid.x % 2 == 0 && gid.y % 2 == 0) {
+        uint2 chromaOutputCoord = uint2(gid.x / 2, gid.y / 2);
+        if (chromaOutputCoord.x < outputUV.get_width() && chromaOutputCoord.y < outputUV.get_height()) {
+            outputUV.write(half4(uValue, vValue, 0, 1), chromaOutputCoord);
+        }
+    }
 }
