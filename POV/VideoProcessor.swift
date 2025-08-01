@@ -392,37 +392,27 @@ class VideoConverterViewController {
         do {
             converter = try VideoAspectRatioConverter(
                 metalDevice: device,
-                shaderFunctionName: "superview"
+                shaderFunctionName: "superview" // Use "superview_yuv_hq" for higher quality
             )
         } catch {
             print("Failed to create converter: \(error)")
         }
     }
     
-    func convertVideo(inputPath: String, outputPath: String) async {
+    func convertVideo(inputPath: String, outputPath: String, progressCallback: @escaping (Float) -> Void) async throws {
         guard let converter = converter else {
-            print("Converter not initialized")
-            return
+            throw VideoConverterError.metalSetupFailed("Converter not initialized")
         }
         
         let inputURL = URL(fileURLWithPath: inputPath)
         let outputURL = URL(fileURLWithPath: outputPath)
         
-        do {
-            try await converter.convertVideo(
-                inputURL: inputURL,
-                outputURL: outputURL
-            ) { progress in
-                DispatchQueue.main.async {
-                    print("Progress: \(Int(progress * 100))%")
-                    // Update your UI progress indicator here
-                }
-            }
-            
-            print("Video conversion completed successfully!")
-            
-        } catch {
-            print("Video conversion failed: \(error)")
-        }
+        try await converter.convertVideo(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            progressCallback: progressCallback
+        )
+        
+        print("Video conversion completed successfully!")
     }
 }
