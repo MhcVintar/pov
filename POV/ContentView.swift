@@ -8,11 +8,17 @@
 import SwiftUI
 import AVFoundation
 
+enum AppState {
+    case fileSelection
+    case fileSelected
+    case processing
+    case completed
+}
+
 struct ContentView: View {
+    @State private var appState: AppState = .fileSelection
     @State private var selectedFilePath: String = "No file selected"
     @State private var selectedVideoURL: URL?
-    @State private var isProcessing = false
-    @State private var processingComplete = false
     @State private var processingProgress: Float = 0.0
     @State private var processingError: String?
     @State private var videoInfo: VideoInfo?
@@ -20,32 +26,37 @@ struct ContentView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            HeaderView()
-            
-            FileSelectionButton {
-                openFileDialog()
-            }
-            
-            if selectedFilePath != "No file selected" {
-                FileInfoSection(
-                    selectedFilePath: selectedFilePath,
-                    videoInfo: videoInfo
-                )
+            switch appState {
+            case .fileSelection:
+                FileSelectionView {
+                    openFileDialog()
+                }
                 
-                ProcessingSection(
-                    isProcessing: isProcessing,
-                    processingProgress: processingProgress,
-                    processingComplete: processingComplete,
-                    processingError: processingError,
-                    estimatedTimeRemaining: estimatedTimeRemaining(),
-                    onProcessVideo: {
+            case .fileSelected:
+                FileSelectedView(
+                    selectedFilePath: selectedFilePath,
+                    videoInfo: videoInfo,
+                    onClear: {
+                        clearSelection()
+                    },
+                    onProcess: {
                         processAndSaveVideo()
                     }
                 )
                 
-                ClearButton {
-                    clearSelection()
-                }
+            case .processing:
+                ProcessingView(
+                    processingProgress: processingProgress,
+                    estimatedTimeRemaining: estimatedTimeRemaining()
+                )
+                
+            case .completed:
+                CompletedView(
+                    processingError: processingError,
+                    onGoBack: {
+                        goBackToStart()
+                    }
+                )
             }
         }
         .padding(30)
@@ -69,12 +80,14 @@ struct ContentView: View {
                 if let url = panel.url {
                     selectedFilePath = url.path
                     selectedVideoURL = url
-                    processingComplete = false
                     processingError = nil
                     processingProgress = 0.0
                     
                     // Load video information
                     loadVideoInfo(from: url)
+                    
+                    // Move to file selected state
+                    appState = .fileSelected
                 }
             }
         }
@@ -134,8 +147,7 @@ struct ContentView: View {
     }
     
     private func startProcessing(inputURL: URL, outputURL: URL) {
-        self.isProcessing = true
-        self.processingComplete = false
+        self.appState = .processing
         self.processingError = nil
         self.processingProgress = 0.0
         self.processingStartTime = Date()
@@ -161,14 +173,13 @@ struct ContentView: View {
             }
             
             await MainActor.run {
-                self.isProcessing = false
-                self.processingComplete = true
+                self.appState = .completed
                 self.processingProgress = 1.0
             }
             
         } catch {
             await MainActor.run {
-                self.isProcessing = false
+                self.appState = .completed
                 self.processingError = error.localizedDescription
                 self.processingProgress = 0.0
             }
@@ -178,16 +189,19 @@ struct ContentView: View {
     private func clearSelection() {
         selectedFilePath = "No file selected"
         selectedVideoURL = nil
-        processingComplete = false
         processingError = nil
         processingProgress = 0.0
         videoInfo = nil
+        appState = .fileSelection
     }
     
-    private func formatDuration(_ seconds: Double) -> String {
-        let minutes = Int(seconds) / 60
-        let remainingSeconds = Int(seconds) % 60
-        return String(format: "%d:%02d", minutes, remainingSeconds)
+    private func goBackToStart() {
+        selectedFilePath = "No file selected"
+        selectedVideoURL = nil
+        processingError = nil
+        processingProgress = 0.0
+        videoInfo = nil
+        appState = .fileSelection
     }
     
     private func estimatedTimeRemaining() -> String {
@@ -207,46 +221,151 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Subviews
+// MARK: - State Views
 
-struct HeaderView: View {
+struct FileSelectionView: View {
+    let onSelectFile: () -> Void
+    
     var body: some View {
-        VStack(spacing: 8) {
-            Text("Video Aspect Ratio Converter")
-                .font(.title)
-                .fontWeight(.bold)
-            
-            Text("Convert 4:3 videos to 16:9 with SuperView transformation")
-                .font(.subheadline)
+        VStack(spacing: 20) {
+            Text("Select a video file to get started")
+                .font(.title2)
                 .foregroundColor(.secondary)
+            
+            Button("Choose Video File", action: onSelectFile)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
         }
     }
 }
 
-struct FileSelectionButton: View {
-    let action: () -> Void
-    
-    var body: some View {
-        Button("Choose Video File", action: action)
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-    }
-}
-
-struct FileInfoSection: View {
+struct FileSelectedView: View {
     let selectedFilePath: String
     let videoInfo: VideoInfo?
+    let onClear: () -> Void
+    let onProcess: () -> Void
     
     var body: some View {
-        VStack(alignment: .center, spacing: 12) {
-            FilePathView(selectedFilePath: selectedFilePath)
+        VStack(spacing: 20) {
+            // File info section
+            VStack(alignment: .center, spacing: 12) {
+                FilePathView(selectedFilePath: selectedFilePath)
+                
+                if let info = videoInfo {
+                    VideoInfoView(videoInfo: info)
+                }
+            }
             
-            if let info = videoInfo {
-                VideoInfoView(videoInfo: info)
+            // Action buttons side by side
+            HStack(spacing: 20) {
+                Button("Clear Selection", action: onClear)
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                
+                Button("Process & Save Video", action: onProcess)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
             }
         }
     }
 }
+
+struct ProcessingView: View {
+    let processingProgress: Float
+    let estimatedTimeRemaining: String
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Processing Video...")
+                .font(.title)
+                .foregroundColor(.blue)
+            
+            // Circular Progress View
+            ZStack {
+                // Background circle
+                Circle()
+                    .stroke(Color.blue.opacity(0.2), lineWidth: 12)
+                    .frame(width: 120, height: 120)
+                
+                // Progress circle
+                Circle()
+                    .trim(from: 0, to: CGFloat(processingProgress))
+                    .stroke(
+                        Color.blue,
+                        style: StrokeStyle(lineWidth: 12, lineCap: .round)
+                    )
+                    .frame(width: 120, height: 120)
+                    .rotationEffect(.degrees(-90)) // Start from top
+                    .animation(.easeInOut(duration: 0.3), value: processingProgress)
+                
+                // Percentage text in center
+                Text("\(Int(processingProgress * 100))%")
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundColor(.blue)
+            }
+            
+            if processingProgress > 0 {
+                Text(estimatedTimeRemaining)
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(40)
+    }
+}
+
+struct CompletedView: View {
+    let processingError: String?
+    let onGoBack: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            if let error = processingError {
+                // Error state
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.red)
+                    
+                    Text("Processing Failed")
+                        .font(.title)
+                        .fontWeight(.bold)
+                        .foregroundColor(.red)
+                    
+                    Text(error)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+            } else {
+                // Success state
+                VStack(spacing: 16) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.green)
+                    
+                    Text("Video Processed Successfully!")
+                        .font(.title)
+                        .fontWeight(.bold)
+                        .foregroundColor(.green)
+                    
+                    Text("Your video has been saved successfully.")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Button("Go Back", action: onGoBack)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+        }
+        .padding(40)
+    }
+}
+
+// MARK: - Subviews
 
 struct FilePathView: View {
     let selectedFilePath: String
@@ -316,138 +435,6 @@ struct InfoRow: View {
                 .fontWeight(.medium)
         }
         .font(.caption)
-    }
-}
-
-struct ProcessingSection: View {
-    let isProcessing: Bool
-    let processingProgress: Float
-    let processingComplete: Bool
-    let processingError: String?
-    let estimatedTimeRemaining: String
-    let onProcessVideo: () -> Void
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            if isProcessing {
-                ProcessingView(
-                    processingProgress: processingProgress,
-                    estimatedTimeRemaining: estimatedTimeRemaining
-                )
-            } else {
-                ProcessButton(action: onProcessVideo)
-            }
-            
-            if processingComplete {
-                SuccessMessage()
-            }
-            
-            if let error = processingError {
-                ErrorMessage(error: error)
-            }
-        }
-    }
-}
-
-struct ProcessingView: View {
-    let processingProgress: Float
-    let estimatedTimeRemaining: String
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Processing Video...")
-                .font(.headline)
-                .foregroundColor(.blue)
-            
-            // Circular Progress View
-            ZStack {
-                // Background circle
-                Circle()
-                    .stroke(Color.blue.opacity(0.2), lineWidth: 8)
-                    .frame(width: 80, height: 80)
-                
-                // Progress circle
-                Circle()
-                    .trim(from: 0, to: CGFloat(processingProgress))
-                    .stroke(
-                        Color.blue,
-                        style: StrokeStyle(lineWidth: 8, lineCap: .round)
-                    )
-                    .frame(width: 80, height: 80)
-                    .rotationEffect(.degrees(-90)) // Start from top
-                    .animation(.easeInOut(duration: 0.3), value: processingProgress)
-                
-                // Percentage text in center
-                Text("\(Int(processingProgress * 100))%")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.blue)
-            }
-            
-            if processingProgress > 0 {
-                Text(estimatedTimeRemaining)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(20)
-        .background(Color.blue.opacity(0.05))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
-        )
-    }
-}
-
-struct ProcessButton: View {
-    let action: () -> Void
-    
-    var body: some View {
-        Button("Process & Save Video", action: action)
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-    }
-}
-
-struct SuccessMessage: View {
-    var body: some View {
-        HStack {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(.green)
-            Text("Video processed and saved successfully!")
-                .foregroundColor(.green)
-                .font(.headline)
-        }
-        .padding(12)
-        .background(Color.green.opacity(0.1))
-        .cornerRadius(8)
-    }
-}
-
-struct ErrorMessage: View {
-    let error: String
-    
-    var body: some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.red)
-            Text("Error: \(error)")
-                .foregroundColor(.red)
-                .font(.subheadline)
-        }
-        .padding(12)
-        .background(Color.red.opacity(0.1))
-        .cornerRadius(8)
-    }
-}
-
-struct ClearButton: View {
-    let action: () -> Void
-    
-    var body: some View {
-        Button("Clear Selection", action: action)
-            .buttonStyle(.bordered)
     }
 }
 
