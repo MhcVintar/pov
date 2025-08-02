@@ -1,10 +1,3 @@
-//
-//  Shaders.metal
-//  POV
-//
-//  Created by Miha Vintar on 31. 7. 25.
-//
-
 #include <metal_stdlib>
 using namespace metal;
 

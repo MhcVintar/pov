@@ -1,10 +1,3 @@
-//
-//  VideoProcessor.swift
-//  POV
-//
-//  Created by Miha Vintar on 31. 7. 25.
-//
-
 import AVFoundation
 import Metal
 import MetalKit
