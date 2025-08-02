@@ -1,12 +1,6 @@
-//
-//  ContentView.swift
-//  POV
-//
-//  Created by Miha Vintar on 28. 7. 25.
-//
-
 import SwiftUI
 import AVFoundation
+import UniformTypeIdentifiers
 
 enum AppState {
     case fileSelection
@@ -25,12 +19,17 @@ struct ContentView: View {
     @State private var processingStartTime = Date()
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             switch appState {
             case .fileSelection:
-                FileSelectionView {
-                    openFileDialog()
-                }
+                FileSelectionView(
+                    onSelectFile: {
+                        openFileDialog()
+                    },
+                    onDropFile: { url in
+                        handleDroppedFile(url: url)
+                    }
+                )
                 
             case .fileSelected:
                 FileSelectedView(
@@ -59,8 +58,8 @@ struct ContentView: View {
                 )
             }
         }
-        .padding(30)
-        .frame(minWidth: 500, minHeight: 400)
+        .padding(20)
+        .frame(minWidth: 380, maxWidth: 420, minHeight: 400)
     }
     
     private func openFileDialog() {
@@ -78,19 +77,39 @@ struct ContentView: View {
         panel.begin { response in
             if response == .OK {
                 if let url = panel.url {
-                    selectedFilePath = url.path
-                    selectedVideoURL = url
-                    processingError = nil
-                    processingProgress = 0.0
-                    
-                    // Load video information
-                    loadVideoInfo(from: url)
-                    
-                    // Move to file selected state
-                    appState = .fileSelected
+                    handleSelectedFile(url: url)
                 }
             }
         }
+    }
+    
+    private func handleDroppedFile(url: URL) {
+        // Validate that it's a video file
+        let allowedTypes: [UTType] = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
+        let fileType = UTType(filenameExtension: url.pathExtension)
+        
+        let isValidVideo = allowedTypes.contains { allowedType in
+            fileType?.conforms(to: allowedType) == true
+        }
+        
+        if isValidVideo {
+            handleSelectedFile(url: url)
+        } else {
+            processingError = "Please select a valid video file"
+        }
+    }
+    
+    private func handleSelectedFile(url: URL) {
+        selectedFilePath = url.path
+        selectedVideoURL = url
+        processingError = nil
+        processingProgress = 0.0
+        
+        // Load video information
+        loadVideoInfo(from: url)
+        
+        // Move to file selected state
+        appState = .fileSelected
     }
     
     private func loadVideoInfo(from url: URL) {
@@ -107,13 +126,13 @@ struct ContentView: View {
                 // Parse file name
                 let name = url.deletingPathExtension().lastPathComponent
                 let ext = url.pathExtension
-                var shortName = name.count > 15 ? String(name.prefix(15)) + "..." : name
+                var shortName = name.count > 12 ? String(name.prefix(12)) + "..." : name
                 shortName = "\(shortName).\(ext)"
                 
                 // Calculate actual dimensions considering transform
                 let transformedSize = naturalSize.applying(transform)
                 let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
-                let outputSize = CGSize(width: inputSize.height * 16/9, height: inputSize.height)
+                let outputSize = CGSize(width: inputSize.width, height: inputSize.height * 3/4)
                 
                 await MainActor.run {
                     self.videoInfo = VideoInfo(
@@ -228,20 +247,88 @@ struct ContentView: View {
     }
 }
 
-// MARK: - State Views
-
 struct FileSelectionView: View {
     let onSelectFile: () -> Void
+    let onDropFile: (URL) -> Void
+    @State private var isDragOver = false
     
     var body: some View {
         VStack(spacing: 20) {
             Text("Select a video file to get started")
-                .font(.title2)
+                .font(.title3)
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
             
-            Button("Choose Video File", action: onSelectFile)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            // Drag and Drop Area
+            VStack(spacing: 16) {
+                ZStack {
+                    // Background
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isDragOver ? Color.blue.opacity(0.1) : Color.gray.opacity(0.05))
+                        .frame(height: 160)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(
+                                    isDragOver ? Color.blue : Color.gray.opacity(0.3),
+                                    style: StrokeStyle(lineWidth: 2, dash: [8])
+                                )
+                        )
+                    
+                    // Content
+                    VStack(spacing: 12) {
+                        Image(systemName: isDragOver ? "video.fill.badge.plus" : "video.badge.plus")
+                            .font(.system(size: 36))
+                            .foregroundColor(isDragOver ? .blue : .gray)
+                        
+                        VStack(spacing: 6) {
+                            Text("Drag and drop your video file here")
+                                .font(.subheadline)
+                                .foregroundColor(isDragOver ? .blue : .primary)
+                                .multilineTextAlignment(.center)
+                            
+                            Text("Supports MP4, MOV, AVI and other formats")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                }
+                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                    guard let provider = providers.first else { return false }
+                    
+                    provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                        guard let data = item as? Data,
+                              let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                        
+                        DispatchQueue.main.async {
+                            onDropFile(url)
+                        }
+                    }
+                    return true
+                }
+                
+                // Or separator
+                HStack {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(height: 1)
+                    
+                    Text("or")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 10)
+                    
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(height: 1)
+                }
+                
+                // Browse button
+                Button("Browse Files", action: onSelectFile)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+            }
         }
     }
 }
@@ -253,23 +340,23 @@ struct FileSelectedView: View {
     let onProcess: () -> Void
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             // File info section
-            VStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .center, spacing: 10) {
                 if let info = videoInfo {
                     VideoInfoView(videoInfo: info)
                 }
             }
             
             // Action buttons side by side
-            HStack(spacing: 20) {
+            HStack(spacing: 12) {
                 Button("Clear Selection", action: onClear)
                     .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    .controlSize(.regular)
                 
                 Button("Process & Save Video", action: onProcess)
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                    .controlSize(.regular)
             }
         }
     }
@@ -280,43 +367,43 @@ struct ProcessingView: View {
     let estimatedTimeRemaining: String
     
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Text("Processing Video...")
-                .font(.title)
+                .font(.title2)
                 .foregroundColor(.blue)
             
             // Circular Progress View
             ZStack {
                 // Background circle
                 Circle()
-                    .stroke(Color.blue.opacity(0.2), lineWidth: 12)
-                    .frame(width: 120, height: 120)
+                    .stroke(Color.blue.opacity(0.2), lineWidth: 10)
+                    .frame(width: 100, height: 100)
                 
                 // Progress circle
                 Circle()
                     .trim(from: 0, to: CGFloat(processingProgress))
                     .stroke(
                         Color.blue,
-                        style: StrokeStyle(lineWidth: 12, lineCap: .round)
+                        style: StrokeStyle(lineWidth: 10, lineCap: .round)
                     )
-                    .frame(width: 120, height: 120)
+                    .frame(width: 100, height: 100)
                     .rotationEffect(.degrees(-90)) // Start from top
                     .animation(.easeInOut(duration: 0.3), value: processingProgress)
                 
                 // Percentage text in center
                 Text("\(Int(processingProgress * 100))%")
-                    .font(.title)
+                    .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(.blue)
             }
             
             if processingProgress > 0 {
                 Text(estimatedTimeRemaining)
-                    .font(.headline)
+                    .font(.subheadline)
                     .foregroundColor(.secondary)
             }
         }
-        .padding(40)
+        .padding(30)
     }
 }
 
@@ -325,48 +412,50 @@ struct CompletedView: View {
     let onGoBack: () -> Void
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             if let error = processingError {
                 // Error state
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 60))
+                        .font(.system(size: 48))
                         .foregroundColor(.red)
                     
                     Text("Processing Failed")
-                        .font(.title)
+                        .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(.red)
                     
                     Text(error)
-                        .font(.body)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal)
+                        .padding(.horizontal, 8)
                 }
             } else {
                 // Success state
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 60))
+                        .font(.system(size: 48))
                         .foregroundColor(.green)
                     
                     Text("Video Processed Successfully!")
-                        .font(.title)
+                        .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(.green)
+                        .multilineTextAlignment(.center)
                     
                     Text("Your video has been saved successfully.")
-                        .font(.body)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
                 }
             }
             
             Button("Go Back", action: onGoBack)
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.regular)
         }
-        .padding(40)
+        .padding(30)
     }
 }
 
@@ -376,9 +465,9 @@ struct VideoInfoView: View {
     let videoInfo: VideoInfo
     
     var body: some View {
-        VStack(alignment: .center, spacing: 4) {
+        VStack(alignment: .center, spacing: 3) {
             Text("Video Information:")
-                .font(.subheadline)
+                .font(.caption)
                 .fontWeight(.semibold)
             
             InfoRow(label: "Name:", value: "\(videoInfo.name)")
@@ -392,9 +481,9 @@ struct VideoInfoView: View {
                     .fontWeight(.medium)
                     .foregroundColor(.blue)
             }
-            .font(.caption)
+            .font(.caption2)
         }
-        .padding(12)
+        .padding(10)
         .background(Color.blue.opacity(0.05))
         .cornerRadius(8)
         .overlay(
@@ -420,7 +509,7 @@ struct InfoRow: View {
             Text(value)
                 .fontWeight(.medium)
         }
-        .font(.caption)
+        .font(.caption2)
     }
 }
 

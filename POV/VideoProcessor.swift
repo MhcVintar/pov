@@ -5,13 +5,6 @@
 //  Created by Miha Vintar on 31. 7. 25.
 //
 
-//
-//  VideoProcessor.swift
-//  POV
-//
-//  Created by Miha Vintar on 31. 7. 25.
-//
-
 import AVFoundation
 import Metal
 import MetalKit
@@ -20,16 +13,31 @@ import CoreVideo
 class VideoAspectRatioConverter {
     private let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let computePipelineState: MTLComputePipelineState
+    private let superviewPipelineState: MTLComputePipelineState
+    private let downscalePipelineState: MTLComputePipelineState
+    private let textureSampler: MTLSamplerState
     private let textureCache: CVMetalTextureCache
     
-    init(metalDevice: MTLDevice, shaderFunctionName: String = "superview") throws {
+    init(metalDevice: MTLDevice, superviewShaderName: String = "superview", downscaleShaderName: String = "downscale") throws {
         self.metalDevice = metalDevice
         
         guard let commandQueue = metalDevice.makeCommandQueue() else {
             throw VideoConverterError.metalSetupFailed("Failed to create command queue")
         }
         self.commandQueue = commandQueue
+        
+        // Create texture sampler
+        let samplerDescriptor = MTLSamplerDescriptor()
+        samplerDescriptor.normalizedCoordinates = true
+        samplerDescriptor.minFilter = .linear
+        samplerDescriptor.magFilter = .linear
+        samplerDescriptor.sAddressMode = .clampToEdge
+        samplerDescriptor.tAddressMode = .clampToEdge
+        
+        guard let sampler = metalDevice.makeSamplerState(descriptor: samplerDescriptor) else {
+            throw VideoConverterError.metalSetupFailed("Failed to create texture sampler")
+        }
+        self.textureSampler = sampler
         
         // Create texture cache
         var textureCache: CVMetalTextureCache?
@@ -39,19 +47,31 @@ class VideoAspectRatioConverter {
         }
         self.textureCache = cache
         
-        // Load and compile shader
+        // Load and compile shaders
         guard let defaultLibrary = metalDevice.makeDefaultLibrary() else {
             throw VideoConverterError.metalSetupFailed("Failed to create default library")
         }
         
-        guard let function = defaultLibrary.makeFunction(name: shaderFunctionName) else {
-            throw VideoConverterError.metalSetupFailed("Failed to find shader function: \(shaderFunctionName)")
+        // Create superview pipeline
+        guard let superviewFunction = defaultLibrary.makeFunction(name: superviewShaderName) else {
+            throw VideoConverterError.metalSetupFailed("Failed to find superview shader function: \(superviewShaderName)")
         }
         
         do {
-            self.computePipelineState = try metalDevice.makeComputePipelineState(function: function)
+            self.superviewPipelineState = try metalDevice.makeComputePipelineState(function: superviewFunction)
         } catch {
-            throw VideoConverterError.metalSetupFailed("Failed to create compute pipeline state: \(error)")
+            throw VideoConverterError.metalSetupFailed("Failed to create superview compute pipeline state: \(error)")
+        }
+        
+        // Create downscale pipeline
+        guard let downscaleFunction = defaultLibrary.makeFunction(name: downscaleShaderName) else {
+            throw VideoConverterError.metalSetupFailed("Failed to find downscale shader function: \(downscaleShaderName)")
+        }
+        
+        do {
+            self.downscalePipelineState = try metalDevice.makeComputePipelineState(function: downscaleFunction)
+        } catch {
+            throw VideoConverterError.metalSetupFailed("Failed to create downscale compute pipeline state: \(error)")
         }
     }
     
@@ -78,23 +98,19 @@ class VideoAspectRatioConverter {
         let transformedSize = naturalSize.applying(transform)
         let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
         
-        // Calculate output size (convert 4:3 to 16:9)
-        let outputSize = CGSize(width: inputSize.height * 16/9, height: inputSize.height)
+        // Calculate intermediate size (downscaled 4:3 that will stretch to original width)
+        let downscaleRatio = CGFloat(3.0/4.0)
+        let intermediateSize = CGSize(
+            width: inputSize.width * downscaleRatio,
+            height: inputSize.height * downscaleRatio
+        )
         
-        // Extract additional video properties for accurate reproduction
-        let originalBitrate = estimatedDataRate > 0 ? Int(estimatedDataRate) : 8_000_000 // Higher fallback for 10-bit
-        let originalFrameRate = nominalFrameRate > 0 ? nominalFrameRate : 30.0
+        // Final output size after superview stretch (should match original width)
+        let outputSize = CGSize(width: intermediateSize.height * 16/9, height: intermediateSize.height)
         
-        // Calculate bitrate accounting for resolution increase and 10-bit content
+        // Calculate bitrate accounting for resolution change
         let resolutionRatio = (outputSize.width * outputSize.height) / (inputSize.width * inputSize.height)
-        let targetBitrate = Int(Double(originalBitrate) * resolutionRatio * 1.15) // 15% overhead for new content
-        
-        print("Original video properties:")
-        print("- Frame rate: \(originalFrameRate) fps")
-        print("- Estimated bitrate: \(originalBitrate) bps")
-        print("- Target bitrate: \(targetBitrate) bps")
-        print("- Input size: \(inputSize)")
-        print("- Output size: \(outputSize)")
+        let targetBitrate = Int(Double(estimatedDataRate) * resolutionRatio * 1.15) // 15% overhead for new content
         
         // Setup reader with YUV420 10-bit format preservation
         let reader = try AVAssetReader(asset: asset)
@@ -115,7 +131,7 @@ class VideoAspectRatioConverter {
         let compressionProperties: [String: Any] = [
             AVVideoAverageBitRateKey: targetBitrate,
             AVVideoProfileLevelKey: "HEVC_Main10_AutoLevel",
-            AVVideoExpectedSourceFrameRateKey: originalFrameRate,
+            AVVideoExpectedSourceFrameRateKey: nominalFrameRate,
         ]
         
         let videoWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -154,7 +170,7 @@ class VideoAspectRatioConverter {
         
         // Calculate total frames more accurately using actual frame rate and duration
         let duration = try await asset.load(.duration)
-        let totalFrames = Int(duration.seconds * Double(originalFrameRate))
+        let totalFrames = Int(duration.seconds * Double(nominalFrameRate))
         var processedFrames = 0
         
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -175,6 +191,7 @@ class VideoAspectRatioConverter {
                         
                         let outputPixelBuffer = try await self.processFrame(
                             inputPixelBuffer: inputPixelBuffer,
+                            intermediateSize: intermediateSize,
                             outputSize: outputSize
                         )
                         
@@ -235,11 +252,38 @@ class VideoAspectRatioConverter {
         }
     }
     
-    private func processFrame(inputPixelBuffer: CVPixelBuffer, outputSize: CGSize) async throws -> CVPixelBuffer {
+    private func processFrame(inputPixelBuffer: CVPixelBuffer, intermediateSize: CGSize, outputSize: CGSize) async throws -> CVPixelBuffer {
+        // Step 1: Downscale the input to intermediate size
+        let intermediateBuffer = try await processFrameWithShader(
+            inputPixelBuffer: inputPixelBuffer,
+            outputSize: intermediateSize,
+            pipelineState: downscalePipelineState,
+            shaderName: "downscale",
+            useSampler: true
+        )
+        
+        // Step 2: Apply superview effect to stretch to final output size
+        let outputBuffer = try await processFrameWithShader(
+            inputPixelBuffer: intermediateBuffer,
+            outputSize: outputSize,
+            pipelineState: superviewPipelineState,
+            shaderName: "superview"
+        )
+        
+        return outputBuffer
+    }
+    
+    private func processFrameWithShader(
+        inputPixelBuffer: CVPixelBuffer,
+        outputSize: CGSize,
+        pipelineState: MTLComputePipelineState,
+        shaderName: String,
+        useSampler: Bool = false
+    ) async throws -> CVPixelBuffer {
         // Create input textures for YUV420 10-bit (bi-planar)
-        guard let yTexture = createYTexture(from: inputPixelBuffer),
-              let uvTexture = createUVTexture(from: inputPixelBuffer) else {
-            throw VideoConverterError.textureCreationFailed("Failed to create input YUV textures")
+        guard let inputYTexture = createYTexture(from: inputPixelBuffer),
+              let inputUVTexture = createUVTexture(from: inputPixelBuffer) else {
+            throw VideoConverterError.textureCreationFailed("Failed to create input YUV textures for \(shaderName)")
         }
         
         // Create output pixel buffer in YUV420 10-bit format
@@ -263,20 +307,23 @@ class VideoAspectRatioConverter {
         // Create output textures
         guard let outputYTexture = createYTexture(from: outputBuffer),
               let outputUVTexture = createUVTexture(from: outputBuffer) else {
-            throw VideoConverterError.textureCreationFailed("Failed to create output YUV textures")
+            throw VideoConverterError.textureCreationFailed("Failed to create output YUV textures for \(shaderName)")
         }
         
-        // Execute Metal shader
+        // Execute shader
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
-            throw VideoConverterError.metalExecutionFailed("Failed to create command buffer or encoder")
+            throw VideoConverterError.metalExecutionFailed("Failed to create command buffer or encoder for \(shaderName)")
         }
         
-        encoder.setComputePipelineState(computePipelineState)
-        encoder.setTexture(yTexture, index: 0)      // Input Y plane
-        encoder.setTexture(uvTexture, index: 1)     // Input UV plane
-        encoder.setTexture(outputYTexture, index: 2) // Output Y plane
-        encoder.setTexture(outputUVTexture, index: 3) // Output UV plane
+        encoder.setComputePipelineState(pipelineState)
+        encoder.setTexture(inputYTexture, index: 0)
+        encoder.setTexture(inputUVTexture, index: 1)
+        encoder.setTexture(outputYTexture, index: 2)
+        encoder.setTexture(outputUVTexture, index: 3)
+        if useSampler {
+            encoder.setSamplerState(textureSampler, index: 0)
+        }
         
         // Calculate thread groups based on output Y texture size
         let threadsPerThreadgroup = MTLSize(width: 16, height: 16, depth: 1)
@@ -293,7 +340,7 @@ class VideoAspectRatioConverter {
         commandBuffer.waitUntilCompleted()
         
         if let error = commandBuffer.error {
-            throw VideoConverterError.metalExecutionFailed(error.localizedDescription)
+            throw VideoConverterError.metalExecutionFailed("\(shaderName): \(error.localizedDescription)")
         }
         
         return outputBuffer
@@ -385,14 +432,14 @@ class VideoConverterViewController {
     
     func setupConverter() {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            print("Metal is not supported on this device")
             return
         }
         
         do {
             converter = try VideoAspectRatioConverter(
                 metalDevice: device,
-                shaderFunctionName: "superview" // Use "superview_yuv_hq" for higher quality
+                superviewShaderName: "superview",
+                downscaleShaderName: "downscale"
             )
         } catch {
             print("Failed to create converter: \(error)")
@@ -412,7 +459,5 @@ class VideoConverterViewController {
             outputURL: outputURL,
             progressCallback: progressCallback
         )
-        
-        print("Video conversion completed successfully!")
     }
 }
