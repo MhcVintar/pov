@@ -1,0 +1,31 @@
+# Xcode
+.DS_Store
+build/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+
+# User data
+POV.xcodeproj/xcuserdata/
+POV.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+/.swiftpm/
+Package.resolved
+
+# Xcode scheme management
+POV.xcodeproj/xcuserdata/
+POV.xcodeproj/xcshareddata/xcschemes/*
+
+# Temporary and log files
+*.log
+
+# macOS
+*.DS_Store
