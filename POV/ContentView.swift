@@ -184,13 +184,12 @@ struct ContentView: View {
     }
     
     private func processVideo(inputURL: URL, outputURL: URL) async {
-        let converterController = VideoConverterViewController()
-        converterController.setupConverter()
-        
         do {
-            try await converterController.convertVideo(
-                inputPath: inputURL.path,
-                outputPath: outputURL.path
+            let videoProcessor = try VideoProcessor()
+            
+            try await videoProcessor.convertVideo(
+                inputURL: inputURL,
+                outputURL: outputURL
             ) { progress in
                 // This closure is called from the video processor with progress updates
                 DispatchQueue.main.async {
@@ -459,8 +458,6 @@ struct CompletedView: View {
     }
 }
 
-// MARK: - Subviews
-
 struct VideoInfoView: View {
     let videoInfo: VideoInfo
     
@@ -512,6 +509,8 @@ struct InfoRow: View {
         .font(.caption2)
     }
 }
+
+
 
 struct VideoInfo {
     let name: String
