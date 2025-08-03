@@ -3,7 +3,6 @@ import Metal
 import MetalKit
 import CoreVideo
 
-// TODO: implement downscale of quality
 class VideoProcessor {
     private let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -118,11 +117,20 @@ class VideoProcessor {
         let naturalSize = try await videoTrack.load(.naturalSize)
         let transform = try await videoTrack.load(.preferredTransform)
         let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-        let estimatedDataRate = try await videoTrack.load(.estimatedDataRate)
+        var estimatedDataRate = try await videoTrack.load(.estimatedDataRate)
         
         // Calculate actual dimensions considering transform
         let transformedSize = naturalSize.applying(transform)
-        let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+        var inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+        
+        // Calculate input dimensions
+        var downscale = false
+        if inputSize.width > outputQuality.size.width {
+            let resolutionRatio = (outputQuality.size.width * outputQuality.size.height) / (inputSize.width * inputSize.height)
+            estimatedDataRate *= Float(resolutionRatio)
+            inputSize = outputQuality.size
+            downscale = true
+        }
         
         // Calculate intermediate size
         var intermediateSize: CGSize
@@ -236,14 +244,18 @@ class VideoProcessor {
                         case .horizontal:
                             outputPixelBuffer = try await self.processHorizontalFrame(
                                 inputPixelBuffer: inputPixelBuffer,
+                                inputSize: inputSize,
                                 intermediateSize: intermediateSize,
-                                outputSize: outputSize
+                                outputSize: outputSize,
+                                downscale: downscale
                             )
                         case .vertical:
                             outputPixelBuffer = try await self.processVerticalFrame(
                                 inputPixelBuffer: inputPixelBuffer,
+                                inputSize: inputSize,
                                 intermediateSize: intermediateSize,
-                                outputSize: outputSize
+                                outputSize: outputSize,
+                                downscale: downscale
                             )
                         }
                         
@@ -304,17 +316,32 @@ class VideoProcessor {
         }
     }
     
-    private func processHorizontalFrame(inputPixelBuffer: CVPixelBuffer, intermediateSize: CGSize, outputSize: CGSize) async throws -> CVPixelBuffer {
-        // Step 1: Downscale the input to intermediate size
-        let intermediateBuffer = try await processFrameWithShader(
-            inputPixelBuffer: inputPixelBuffer,
+    private func processHorizontalFrame(
+        inputPixelBuffer: CVPixelBuffer,
+        inputSize: CGSize,
+        intermediateSize: CGSize,
+        outputSize: CGSize,
+        downscale: Bool
+    ) async throws -> CVPixelBuffer {
+        var intermediateBuffer = inputPixelBuffer
+        if downscale {
+            intermediateBuffer = try await processFrameWithShader(
+                inputPixelBuffer: intermediateBuffer,
+                outputSize: inputSize,
+                pipelineState: downscalePipelineState,
+                shaderName: "downscale",
+                useSampler: true
+            )
+        }
+
+        intermediateBuffer = try await processFrameWithShader(
+            inputPixelBuffer: intermediateBuffer,
             outputSize: intermediateSize,
             pipelineState: downscalePipelineState,
             shaderName: "downscale",
             useSampler: true
         )
         
-        // Step 2: Apply superview effect to stretch to final output size
         let outputBuffer = try await processFrameWithShader(
             inputPixelBuffer: intermediateBuffer,
             outputSize: outputSize,
@@ -325,16 +352,31 @@ class VideoProcessor {
         return outputBuffer
     }
     
-    private func processVerticalFrame(inputPixelBuffer: CVPixelBuffer, intermediateSize: CGSize, outputSize: CGSize) async throws -> CVPixelBuffer {
-        // Step 1: Crop the input to intermediate size
-        let intermediateBuffer = try await processFrameWithShader(
-            inputPixelBuffer: inputPixelBuffer,
+    private func processVerticalFrame(
+        inputPixelBuffer: CVPixelBuffer,
+        inputSize: CGSize,
+        intermediateSize: CGSize,
+        outputSize: CGSize,
+        downscale: Bool
+    ) async throws -> CVPixelBuffer {
+        var intermediateBuffer = inputPixelBuffer
+        if downscale {
+            intermediateBuffer = try await processFrameWithShader(
+                inputPixelBuffer: intermediateBuffer,
+                outputSize: inputSize,
+                pipelineState: downscalePipelineState,
+                shaderName: "downscale",
+                useSampler: true
+            )
+        }
+        
+        intermediateBuffer = try await processFrameWithShader(
+            inputPixelBuffer: intermediateBuffer,
             outputSize: intermediateSize,
             pipelineState: cropPipelineState,
             shaderName: "crop"
         )
         
-        // Step 2: Apply linear effect to stretch to final output size
         let outputBuffer = try await processFrameWithShader(
             inputPixelBuffer: intermediateBuffer,
             outputSize: outputSize,
