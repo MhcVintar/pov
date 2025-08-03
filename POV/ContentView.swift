@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var processingError: String?
     @State private var videoInfo: VideoInfo?
     @State private var processingStartTime = Date()
+    @State private var selectedProcessingMode: ProcessDimension = .horizontal
     
     var body: some View {
         VStack(spacing: 16) {
@@ -35,6 +36,7 @@ struct ContentView: View {
                 FileSelectedView(
                     selectedFilePath: selectedFilePath,
                     videoInfo: videoInfo,
+                    selectedProcessingMode: $selectedProcessingMode,
                     onClear: {
                         clearSelection()
                     },
@@ -46,7 +48,8 @@ struct ContentView: View {
             case .processing:
                 ProcessingView(
                     processingProgress: processingProgress,
-                    estimatedTimeRemaining: estimatedTimeRemaining()
+                    estimatedTimeRemaining: estimatedTimeRemaining(),
+                    processingMode: selectedProcessingMode
                 )
                 
             case .completed:
@@ -132,13 +135,11 @@ struct ContentView: View {
                 // Calculate actual dimensions considering transform
                 let transformedSize = naturalSize.applying(transform)
                 let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
-                let outputSize = CGSize(width: inputSize.width, height: inputSize.height * 3/4)
                 
                 await MainActor.run {
                     self.videoInfo = VideoInfo(
                         name: shortName,
                         resolution: inputSize,
-                        outputSize: outputSize,
                         duration: duration.seconds,
                         frameRate: Double(nominalFrameRate)
                     )
@@ -163,7 +164,8 @@ struct ContentView: View {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
         let timestamp = dateFormatter.string(from: Date())
-        savePanel.nameFieldStringValue = "pov_export_\(timestamp).MOV"
+        let modePrefix = selectedProcessingMode == .horizontal ? "horizontal" : "vertical"
+        savePanel.nameFieldStringValue = "pov_\(modePrefix)_\(timestamp).MOV"
         
         savePanel.begin { response in
             guard response == .OK, let outputURL = savePanel.url else { return }
@@ -185,7 +187,7 @@ struct ContentView: View {
     
     private func processVideo(inputURL: URL, outputURL: URL) async {
         do {
-            let videoProcessor = try VideoProcessor()
+            let videoProcessor = try VideoProcessor(processDimension: selectedProcessingMode)
             
             try await videoProcessor.convertVideo(
                 inputURL: inputURL,
@@ -335,6 +337,7 @@ struct FileSelectionView: View {
 struct FileSelectedView: View {
     let selectedFilePath: String
     let videoInfo: VideoInfo?
+    @Binding var selectedProcessingMode: ProcessDimension
     let onClear: () -> Void
     let onProcess: () -> Void
     
@@ -343,9 +346,23 @@ struct FileSelectedView: View {
             // File info section
             VStack(alignment: .center, spacing: 10) {
                 if let info = videoInfo {
-                    VideoInfoView(videoInfo: info)
+                    VideoInfoView(videoInfo: info, processingMode: selectedProcessingMode)
                 }
             }
+            
+            // Processing mode selection
+            VStack(spacing: 8) {
+                Text("Processing Mode")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                Picker("", selection: $selectedProcessingMode) {
+                    Text("Horizontal").tag(ProcessDimension.horizontal)
+                    Text("Vertical").tag(ProcessDimension.vertical)
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(.vertical, 8)
             
             // Action buttons side by side
             HStack(spacing: 12) {
@@ -364,12 +381,17 @@ struct FileSelectedView: View {
 struct ProcessingView: View {
     let processingProgress: Float
     let estimatedTimeRemaining: String
+    let processingMode: ProcessDimension
     
     var body: some View {
         VStack(spacing: 12) {
             Text("Processing Video...")
                 .font(.title2)
                 .foregroundColor(.blue)
+            
+            Text("Mode: \(processingMode == .horizontal ? "Horizontal" : "Vertical")")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
             
             // Circular Progress View
             ZStack {
@@ -460,27 +482,20 @@ struct CompletedView: View {
 
 struct VideoInfoView: View {
     let videoInfo: VideoInfo
+    let processingMode: ProcessDimension
     
     var body: some View {
-        VStack(alignment: .center, spacing: 3) {
+        VStack(alignment: .center, spacing: 6) {
             Text("Video Information:")
-                .font(.caption)
+                .font(.subheadline)
                 .fontWeight(.semibold)
             
             InfoRow(label: "Name:", value: "\(videoInfo.name)")
             InfoRow(label: "Resolution:", value: "\(Int(videoInfo.resolution.width)) × \(Int(videoInfo.resolution.height))")
             InfoRow(label: "Duration:", value: formatDuration(videoInfo.duration))
             InfoRow(label: "Frame Rate:", value: "\(String(format: "%.1f", videoInfo.frameRate)) fps")
-            
-            HStack {
-                Text("Output Size:")
-                Text("\(Int(videoInfo.outputSize.width)) × \(Int(videoInfo.outputSize.height))")
-                    .fontWeight(.medium)
-                    .foregroundColor(.blue)
-            }
-            .font(.caption2)
         }
-        .padding(10)
+        .padding(12)
         .background(Color.blue.opacity(0.05))
         .cornerRadius(8)
         .overlay(
@@ -506,16 +521,13 @@ struct InfoRow: View {
             Text(value)
                 .fontWeight(.medium)
         }
-        .font(.caption2)
+        .font(.callout)
     }
 }
-
-
 
 struct VideoInfo {
     let name: String
     let resolution: CGSize
-    let outputSize: CGSize
     let duration: Double
     let frameRate: Double
 }

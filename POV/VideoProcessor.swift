@@ -3,15 +3,23 @@ import Metal
 import MetalKit
 import CoreVideo
 
+enum ProcessDimension {
+    case horizontal
+    case vertical
+}
+
 class VideoProcessor {
     private let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
+    private let processDimension: ProcessDimension
     private let superviewPipelineState: MTLComputePipelineState
     private let downscalePipelineState: MTLComputePipelineState
+    private let linearPipelineState: MTLComputePipelineState
+    private let cropPipelineState: MTLComputePipelineState
     private let textureSampler: MTLSamplerState
     private let textureCache: CVMetalTextureCache
     
-    init(superviewShaderName: String = "superview", downscaleShaderName: String = "downscale") throws {
+    init(processDimension: ProcessDimension) throws {
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
             throw VideoProcessorError.metalSetupFailed("Failed to create Metal device")
         }
@@ -21,6 +29,8 @@ class VideoProcessor {
             throw VideoProcessorError.metalSetupFailed("Failed to create command queue")
         }
         self.commandQueue = commandQueue
+        
+        self.processDimension = processDimension
         
         // Create texture sampler
         let samplerDescriptor = MTLSamplerDescriptor()
@@ -49,8 +59,8 @@ class VideoProcessor {
         }
         
         // Create superview pipeline
-        guard let superviewFunction = defaultLibrary.makeFunction(name: superviewShaderName) else {
-            throw VideoProcessorError.metalSetupFailed("Failed to find superview shader function: \(superviewShaderName)")
+        guard let superviewFunction = defaultLibrary.makeFunction(name: "superview") else {
+            throw VideoProcessorError.metalSetupFailed("Failed to find superview shader function")
         }
         
         do {
@@ -60,14 +70,36 @@ class VideoProcessor {
         }
         
         // Create downscale pipeline
-        guard let downscaleFunction = defaultLibrary.makeFunction(name: downscaleShaderName) else {
-            throw VideoProcessorError.metalSetupFailed("Failed to find downscale shader function: \(downscaleShaderName)")
+        guard let downscaleFunction = defaultLibrary.makeFunction(name: "downscale") else {
+            throw VideoProcessorError.metalSetupFailed("Failed to find downscale shader function")
         }
         
         do {
             self.downscalePipelineState = try metalDevice.makeComputePipelineState(function: downscaleFunction)
         } catch {
             throw VideoProcessorError.metalSetupFailed("Failed to create downscale compute pipeline state: \(error)")
+        }
+        
+        // Create linear pipeline
+        guard let linearFunction = defaultLibrary.makeFunction(name: "linear") else {
+            throw VideoProcessorError.metalSetupFailed("Failed to find linear shader function")
+        }
+        
+        do {
+            self.linearPipelineState = try metalDevice.makeComputePipelineState(function: linearFunction)
+        } catch {
+            throw VideoProcessorError.metalSetupFailed("Failed to create linear compute pipeline state: \(error)")
+        }
+
+        // Create crop pipeline
+        guard let CropFunction = defaultLibrary.makeFunction(name: "crop") else {
+            throw VideoProcessorError.metalSetupFailed("Failed to find crop shader function")
+        }
+        
+        do {
+            self.cropPipelineState = try metalDevice.makeComputePipelineState(function: CropFunction)
+        } catch {
+            throw VideoProcessorError.metalSetupFailed("Failed to create crop compute pipeline state: \(error)")
         }
     }
     
@@ -94,19 +126,35 @@ class VideoProcessor {
         let transformedSize = naturalSize.applying(transform)
         let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
         
-        // Calculate intermediate size (downscaled 4:3 that will stretch to original width)
-        let downscaleRatio = CGFloat(3.0/4.0)
-        let intermediateSize = CGSize(
-            width: inputSize.width * downscaleRatio,
-            height: inputSize.height * downscaleRatio
-        )
+        // Calculate intermediate size
+        var intermediateSize: CGSize
+        switch processDimension {
+        case .horizontal:
+            let downscaleRatio = CGFloat(3.0/4.0)
+            intermediateSize = CGSize(
+                width: inputSize.width * downscaleRatio,
+                height: inputSize.height * downscaleRatio
+            )
+        case .vertical:
+            let cropRatio = CGFloat(7.0/8.0)
+            intermediateSize = CGSize(
+                width: inputSize.height * cropRatio,
+                height: inputSize.height
+            )
+        }
         
-        // Final output size after superview stretch (should match original width)
-        let outputSize = CGSize(width: intermediateSize.height * 16/9, height: intermediateSize.height)
+        // Calculate output size
+        var outputSize: CGSize
+        switch processDimension {
+        case .horizontal:
+            outputSize = CGSize(width: intermediateSize.height * 16/9, height: intermediateSize.height)
+        case .vertical:
+            outputSize = CGSize(width: intermediateSize.height * 3/4, height: intermediateSize.height * 4/3)
+        }
         
         // Calculate bitrate accounting for resolution change
         let resolutionRatio = (outputSize.width * outputSize.height) / (inputSize.width * inputSize.height)
-        let targetBitrate = Int(Double(estimatedDataRate) * resolutionRatio * 1.15) // 15% overhead for new content
+        let targetBitrate = Int(Double(estimatedDataRate) * resolutionRatio)
         
         // Setup reader with YUV420 10-bit format preservation
         let reader = try AVAssetReader(asset: asset)
@@ -185,11 +233,21 @@ class VideoProcessor {
                         
                         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                         
-                        let outputPixelBuffer = try await self.processFrame(
-                            inputPixelBuffer: inputPixelBuffer,
-                            intermediateSize: intermediateSize,
-                            outputSize: outputSize
-                        )
+                        var outputPixelBuffer: CVPixelBuffer
+                        switch self.processDimension {
+                        case .horizontal:
+                            outputPixelBuffer = try await self.processHorizontalFrame(
+                                inputPixelBuffer: inputPixelBuffer,
+                                intermediateSize: intermediateSize,
+                                outputSize: outputSize
+                            )
+                        case .vertical:
+                            outputPixelBuffer = try await self.processVerticalFrame(
+                                inputPixelBuffer: inputPixelBuffer,
+                                intermediateSize: intermediateSize,
+                                outputSize: outputSize
+                            )
+                        }
                         
                         if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
                             print("Failed to append pixel buffer at time: \(presentationTime)")
@@ -248,7 +306,7 @@ class VideoProcessor {
         }
     }
     
-    private func processFrame(inputPixelBuffer: CVPixelBuffer, intermediateSize: CGSize, outputSize: CGSize) async throws -> CVPixelBuffer {
+    private func processHorizontalFrame(inputPixelBuffer: CVPixelBuffer, intermediateSize: CGSize, outputSize: CGSize) async throws -> CVPixelBuffer {
         // Step 1: Downscale the input to intermediate size
         let intermediateBuffer = try await processFrameWithShader(
             inputPixelBuffer: inputPixelBuffer,
@@ -269,6 +327,26 @@ class VideoProcessor {
         return outputBuffer
     }
     
+    private func processVerticalFrame(inputPixelBuffer: CVPixelBuffer, intermediateSize: CGSize, outputSize: CGSize) async throws -> CVPixelBuffer {
+        // Step 1: Crop the input to intermediate size
+        let intermediateBuffer = try await processFrameWithShader(
+            inputPixelBuffer: inputPixelBuffer,
+            outputSize: intermediateSize,
+            pipelineState: cropPipelineState,
+            shaderName: "crop"
+        )
+        
+        // Step 2: Apply linear effect to stretch to final output size
+        let outputBuffer = try await processFrameWithShader(
+            inputPixelBuffer: intermediateBuffer,
+            outputSize: outputSize,
+            pipelineState: linearPipelineState,
+            shaderName: "linear"
+        )
+        
+        return outputBuffer
+    }
+
     private func processFrameWithShader(
         inputPixelBuffer: CVPixelBuffer,
         outputSize: CGSize,
