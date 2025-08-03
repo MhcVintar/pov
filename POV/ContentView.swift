@@ -9,6 +9,96 @@ enum AppState {
     case completed
 }
 
+enum Orientation: String, CaseIterable {
+    case horizontal = "Horizontal"
+    case vertical = "Vertical"
+    
+    var displayName: String {
+        return self.rawValue
+    }
+    
+    var description: String {
+        switch self {
+        case .horizontal:
+            return "Wide screen format"
+        case .vertical:
+            return "Portrait format"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .horizontal:
+            return "rectangle"
+        case .vertical:
+            return "rectangle.portrait"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .horizontal:
+            return .blue
+        case .vertical:
+            return .purple
+        }
+    }
+}
+
+enum OutputQuality: String, CaseIterable {
+    case uhd4k = "4K"
+    case k27 = "2.7K"
+    case fullhd = "1080p"
+    
+    var displayName: String {
+        return self.rawValue
+    }
+    
+    var description: String {
+        switch self {
+        case .uhd4k:
+            return "Ultra HD"
+        case .k27:
+            return "High Quality"
+        case .fullhd:
+            return "Standard HD"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .uhd4k:
+            return "4k.tv"
+        case .k27:
+            return "tv"
+        case .fullhd:
+            return "tv.fill"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .uhd4k:
+            return .red
+        case .k27:
+            return .orange
+        case .fullhd:
+            return .green
+        }
+    }
+    
+    var size: CGSize {
+        switch self {
+        case .uhd4k:
+            return CGSize(width: 3840.0, height: 2880.0)
+        case .k27:
+            return CGSize(width: 2704.0, height: 2028.0)
+        case .fullhd:
+            return CGSize(width: 1920.0, height: 1440.0)
+        }
+    }
+}
+
 struct ContentView: View {
     @State private var appState: AppState = .fileSelection
     @State private var selectedFilePath: String = "No file selected"
@@ -17,7 +107,8 @@ struct ContentView: View {
     @State private var processingError: String?
     @State private var videoInfo: VideoInfo?
     @State private var processingStartTime = Date()
-    @State private var selectedProcessingMode: ProcessDimension = .horizontal
+    @State private var selectedOrientation: Orientation = .horizontal
+    @State private var selectedOutputQuality: OutputQuality = .k27
     
     var body: some View {
         VStack(spacing: 16) {
@@ -36,7 +127,8 @@ struct ContentView: View {
                 FileSelectedView(
                     selectedFilePath: selectedFilePath,
                     videoInfo: videoInfo,
-                    selectedProcessingMode: $selectedProcessingMode,
+                    selectedOrientation: $selectedOrientation,
+                    selectedOutputQuality: $selectedOutputQuality,
                     onClear: {
                         clearSelection()
                     },
@@ -49,7 +141,8 @@ struct ContentView: View {
                 ProcessingView(
                     processingProgress: processingProgress,
                     estimatedTimeRemaining: estimatedTimeRemaining(),
-                    processingMode: selectedProcessingMode
+                    orientation: selectedOrientation,
+                    outputQuality: selectedOutputQuality
                 )
                 
             case .completed:
@@ -160,12 +253,13 @@ struct ContentView: View {
         savePanel.title = "Save Processed Video"
         savePanel.allowedContentTypes = [.quickTimeMovie, .mpeg4Movie]
         
-        // Generate unique file name
+        // Generate unique file name with quality information
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
         let timestamp = dateFormatter.string(from: Date())
-        let modePrefix = selectedProcessingMode == .horizontal ? "horizontal" : "vertical"
-        savePanel.nameFieldStringValue = "pov_\(modePrefix)_\(timestamp).MOV"
+        let orientationPrefix = selectedOrientation == .horizontal ? "horizontal" : "vertical"
+        let qualityPrefix = selectedOutputQuality.rawValue.lowercased()
+        savePanel.nameFieldStringValue = "pov_\(orientationPrefix)_\(qualityPrefix)_\(timestamp).MOV"
         
         savePanel.begin { response in
             guard response == .OK, let outputURL = savePanel.url else { return }
@@ -187,7 +281,10 @@ struct ContentView: View {
     
     private func processVideo(inputURL: URL, outputURL: URL) async {
         do {
-            let videoProcessor = try VideoProcessor(processDimension: selectedProcessingMode)
+            let videoProcessor = try VideoProcessor(
+                orientation: selectedOrientation,
+                outputQuality: selectedOutputQuality
+            )
             
             try await videoProcessor.convertVideo(
                 inputURL: inputURL,
@@ -354,7 +451,8 @@ struct FileSelectionView: View {
 struct FileSelectedView: View {
     let selectedFilePath: String
     let videoInfo: VideoInfo?
-    @Binding var selectedProcessingMode: ProcessDimension
+    @Binding var selectedOrientation: Orientation
+    @Binding var selectedOutputQuality: OutputQuality
     let onClear: () -> Void
     let onProcess: () -> Void
     
@@ -421,36 +519,41 @@ struct FileSelectedView: View {
                 )
             }
             
-            // Processing Mode Selection
+            // Orientation Selection
             VStack(spacing: 12) {
-                Text("Choose Processing Mode")
+                Text("Choose Orientation")
                     .font(.headline)
                     .fontWeight(.semibold)
                 
                 HStack(spacing: 16) {
-                    // Horizontal Mode Card
-                    ProcessingModeCard(
-                        icon: "rectangle",
-                        title: "Horizontal",
-                        description: "Wide screen format",
-                        isSelected: selectedProcessingMode == .horizontal,
-                        color: .blue
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            selectedProcessingMode = .horizontal
+                    ForEach(Orientation.allCases, id: \.self) { orientation in
+                        OrientationCard(
+                            orientation: orientation,
+                            isSelected: selectedOrientation == orientation
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedOrientation = orientation
+                            }
                         }
                     }
-                    
-                    // Vertical Mode Card
-                    ProcessingModeCard(
-                        icon: "rectangle.portrait",
-                        title: "Vertical",
-                        description: "Portrait format",
-                        isSelected: selectedProcessingMode == .vertical,
-                        color: .purple
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            selectedProcessingMode = .vertical
+                }
+            }
+            
+            // Output Quality Selection
+            VStack(spacing: 12) {
+                Text("Output Quality")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                
+                HStack(spacing: 12) {
+                    ForEach(OutputQuality.allCases, id: \.self) { quality in
+                        QualityModeCard(
+                            quality: quality,
+                            isSelected: selectedOutputQuality == quality
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedOutputQuality = quality
+                            }
                         }
                     }
                 }
@@ -511,6 +614,56 @@ struct FileSelectedView: View {
     }
 }
 
+struct QualityModeCard: View {
+    let quality: OutputQuality
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isSelected ? quality.color.opacity(0.15) : Color.clear)
+                        .frame(width: 60, height: 40)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(isSelected ? quality.color : Color.secondary.opacity(0.3), lineWidth: 2)
+                        )
+                    
+                    Image(systemName: quality.icon)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(isSelected ? quality.color : .secondary)
+                }
+                
+                VStack(spacing: 4) {
+                    Text(quality.displayName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(isSelected ? quality.color : .primary)
+                    
+                    Text(quality.description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(.vertical, 16)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? quality.color.opacity(0.05) : Color(NSColor.controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isSelected ? quality.color.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: isSelected ? 2 : 1)
+                    )
+            )
+            .animation(.easeInOut(duration: 0.2), value: isSelected)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct VideoSpecCard: View {
     let icon: String
     let title: String
@@ -555,12 +708,9 @@ struct VideoSpecCard: View {
     }
 }
 
-struct ProcessingModeCard: View {
-    let icon: String
-    let title: String
-    let description: String
+struct OrientationCard: View {
+    let orientation: Orientation
     let isSelected: Bool
-    let color: Color
     let action: () -> Void
     
     var body: some View {
@@ -568,24 +718,24 @@ struct ProcessingModeCard: View {
             VStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(isSelected ? color.opacity(0.15) : Color.clear)
+                        .fill(isSelected ? orientation.color.opacity(0.15) : Color.clear)
                         .frame(width: 60, height: 40)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(isSelected ? color : Color.secondary.opacity(0.3), lineWidth: 2)
+                                .stroke(isSelected ? orientation.color : Color.secondary.opacity(0.3), lineWidth: 2)
                         )
                     
-                    Image(systemName: icon)
+                    Image(systemName: orientation.icon)
                         .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(isSelected ? color : .secondary)
+                        .foregroundColor(isSelected ? orientation.color : .secondary)
                 }
                 
                 VStack(spacing: 4) {
-                    Text(title)
+                    Text(orientation.displayName)
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(isSelected ? color : .primary)
+                        .foregroundColor(isSelected ? orientation.color : .primary)
                     
-                    Text(description)
+                    Text(orientation.description)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -596,10 +746,10 @@ struct ProcessingModeCard: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? color.opacity(0.05) : Color(NSColor.controlBackgroundColor))
+                    .fill(isSelected ? orientation.color.opacity(0.05) : Color(NSColor.controlBackgroundColor))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(isSelected ? color.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: isSelected ? 2 : 1)
+                            .stroke(isSelected ? orientation.color.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: isSelected ? 2 : 1)
                     )
             )
             .animation(.easeInOut(duration: 0.2), value: isSelected)
@@ -611,7 +761,8 @@ struct ProcessingModeCard: View {
 struct ProcessingView: View {
     let processingProgress: Float
     let estimatedTimeRemaining: String
-    let processingMode: ProcessDimension
+    let orientation: Orientation
+    let outputQuality: OutputQuality
     
     var body: some View {
         VStack(spacing: 12) {
@@ -619,9 +770,15 @@ struct ProcessingView: View {
                 .font(.title2)
                 .foregroundColor(.blue)
             
-            Text("Mode: \(processingMode == .horizontal ? "Horizontal" : "Vertical")")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            VStack(spacing: 4) {
+                Text("Orientation: \(orientation.displayName)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Text("Quality: \(outputQuality.displayName)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
             
             // Circular Progress View
             ZStack {
@@ -730,7 +887,7 @@ struct CompletedView: View {
 
 struct VideoInfoView: View {
     let videoInfo: VideoInfo
-    let processingMode: ProcessDimension
+    let orientation: Orientation
     
     var body: some View {
         VStack(alignment: .center, spacing: 6) {

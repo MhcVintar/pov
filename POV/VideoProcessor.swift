@@ -3,15 +3,12 @@ import Metal
 import MetalKit
 import CoreVideo
 
-enum ProcessDimension {
-    case horizontal
-    case vertical
-}
-
+// TODO: implement downscale of quality
 class VideoProcessor {
     private let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let processDimension: ProcessDimension
+    private let orientation: Orientation
+    private let outputQuality: OutputQuality
     private let superviewPipelineState: MTLComputePipelineState
     private let downscalePipelineState: MTLComputePipelineState
     private let linearPipelineState: MTLComputePipelineState
@@ -19,7 +16,10 @@ class VideoProcessor {
     private let textureSampler: MTLSamplerState
     private let textureCache: CVMetalTextureCache
     
-    init(processDimension: ProcessDimension) throws {
+    init(orientation: Orientation, outputQuality: OutputQuality) throws {
+        self.orientation = orientation
+        self.outputQuality = outputQuality
+        
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
             throw VideoProcessorError.metalSetupFailed("Failed to create Metal device")
         }
@@ -29,8 +29,6 @@ class VideoProcessor {
             throw VideoProcessorError.metalSetupFailed("Failed to create command queue")
         }
         self.commandQueue = commandQueue
-        
-        self.processDimension = processDimension
         
         // Create texture sampler
         let samplerDescriptor = MTLSamplerDescriptor()
@@ -128,7 +126,7 @@ class VideoProcessor {
         
         // Calculate intermediate size
         var intermediateSize: CGSize
-        switch processDimension {
+        switch orientation {
         case .horizontal:
             let downscaleRatio = CGFloat(3.0/4.0)
             intermediateSize = CGSize(
@@ -145,7 +143,7 @@ class VideoProcessor {
         
         // Calculate output size
         var outputSize: CGSize
-        switch processDimension {
+        switch orientation {
         case .horizontal:
             outputSize = CGSize(width: intermediateSize.height * 16/9, height: intermediateSize.height)
         case .vertical:
@@ -234,7 +232,7 @@ class VideoProcessor {
                         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                         
                         var outputPixelBuffer: CVPixelBuffer
-                        switch self.processDimension {
+                        switch self.orientation {
                         case .horizontal:
                             outputPixelBuffer = try await self.processHorizontalFrame(
                                 inputPixelBuffer: inputPixelBuffer,

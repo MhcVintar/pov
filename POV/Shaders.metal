@@ -102,11 +102,10 @@ kernel void crop(texture2d<half, access::sample> inputY [[texture(0)]],
     // Compute offset
     uint offsetX = (inputY.get_width() - outputY.get_width()) / 2;
     uint offsetY = (inputY.get_height() - outputY.get_height()) / 2;
-    // TODO: maybe this is a shorthand?
-    // uint2 offset = (inputY - outputY) / 2;
+    uint2 offset = uint2(offsetX, offsetY);
     
     // Sample Y plane
-    uint2 inputCoord = uint2(gid.x + offsetX, gid.y + offsetY);
+    uint2 inputCoord = gid + offset;
     half yValue = inputY.read(inputCoord).r;
     outputY.write(half4(yValue, 0, 0, 1), gid);
 
