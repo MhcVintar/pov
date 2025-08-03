@@ -129,7 +129,7 @@ struct ContentView: View {
                 // Parse file name
                 let name = url.deletingPathExtension().lastPathComponent
                 let ext = url.pathExtension
-                var shortName = name.count > 12 ? String(name.prefix(12)) + "..." : name
+                var shortName = name.count > 25 ? String(name.prefix(19)) + "..." + String(name.suffix(3)) : name
                 shortName = "\(shortName).\(ext)"
                 
                 // Calculate actual dimensions considering transform
@@ -325,10 +325,27 @@ struct FileSelectionView: View {
                         .frame(height: 1)
                 }
                 
-                // Browse button
-                Button("Browse Files", action: onSelectFile)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
+                // Browse button - Updated styling
+                Button(action: onSelectFile) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                        Text("Browse Files")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .shadow(color: .blue.opacity(0.3), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -342,39 +359,252 @@ struct FileSelectedView: View {
     let onProcess: () -> Void
     
     var body: some View {
-        VStack(spacing: 16) {
-            // File info section
-            VStack(alignment: .center, spacing: 10) {
-                if let info = videoInfo {
-                    VideoInfoView(videoInfo: info, processingMode: selectedProcessingMode)
+        VStack(spacing: 20) {
+            // Video Info Card
+            if let info = videoInfo {
+                VStack(spacing: 16) {
+                    // Header with video name
+                    VStack(spacing: 4) {
+                        Text(info.name)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .lineLimit(1)
+                        
+                        Text("Ready to process")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // Video specs in a grid
+                    LazyVGrid(columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ], spacing: 12) {
+                        VideoSpecCard(
+                            icon: "viewfinder",
+                            title: "Resolution",
+                            value: "\(Int(info.resolution.width)) × \(Int(info.resolution.height))",
+                            color: .blue
+                        )
+                        
+                        VideoSpecCard(
+                            icon: "clock.fill",
+                            title: "Duration",
+                            value: formatDuration(info.duration),
+                            color: .green
+                        )
+                        
+                        VideoSpecCard(
+                            icon: "speedometer",
+                            title: "Frame Rate",
+                            value: "\(String(format: "%.0f", info.frameRate)) fps",
+                            color: .orange
+                        )
+                        
+                        VideoSpecCard(
+                            icon: "doc.fill",
+                            title: "Format",
+                            value: info.name.components(separatedBy: ".").last?.uppercased() ?? "VIDEO",
+                            color: .purple
+                        )
+                    }
                 }
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color(NSColor.controlBackgroundColor))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+                )
             }
             
-            // Processing mode selection
-            VStack(spacing: 8) {
-                Text("Processing Mode")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+            // Processing Mode Selection
+            VStack(spacing: 12) {
+                Text("Choose Processing Mode")
+                    .font(.headline)
+                    .fontWeight(.semibold)
                 
-                Picker("", selection: $selectedProcessingMode) {
-                    Text("Horizontal").tag(ProcessDimension.horizontal)
-                    Text("Vertical").tag(ProcessDimension.vertical)
+                HStack(spacing: 16) {
+                    // Horizontal Mode Card
+                    ProcessingModeCard(
+                        icon: "rectangle",
+                        title: "Horizontal",
+                        description: "Wide screen format",
+                        isSelected: selectedProcessingMode == .horizontal,
+                        color: .blue
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedProcessingMode = .horizontal
+                        }
+                    }
+                    
+                    // Vertical Mode Card
+                    ProcessingModeCard(
+                        icon: "rectangle.portrait",
+                        title: "Vertical",
+                        description: "Portrait format",
+                        isSelected: selectedProcessingMode == .vertical,
+                        color: .purple
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedProcessingMode = .vertical
+                        }
+                    }
                 }
-                .pickerStyle(.segmented)
             }
-            .padding(.vertical, 8)
             
-            // Action buttons side by side
+            Spacer().frame(height: 8)
+            
+            // Action buttons
             HStack(spacing: 12) {
-                Button("Clear Selection", action: onClear)
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
+                Button(action: onClear) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Start Over")
+                    }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
                 
-                Button("Process & Save Video", action: onProcess)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
+                Button(action: onProcess) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                        Text("Process Video")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .shadow(color: .blue.opacity(0.3), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
             }
         }
+    }
+    
+    private func formatDuration(_ seconds: Double) -> String {
+        let minutes = Int(seconds) / 60
+        let remainingSeconds = Int(seconds) % 60
+        return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+}
+
+struct VideoSpecCard: View {
+    let icon: String
+    let title: String
+    let value: String
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(color)
+            }
+            
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fontWeight(.medium)
+                
+                Text(value)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.windowBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(color.opacity(0.2), lineWidth: 1)
+                )
+        )
+    }
+}
+
+struct ProcessingModeCard: View {
+    let icon: String
+    let title: String
+    let description: String
+    let isSelected: Bool
+    let color: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isSelected ? color.opacity(0.15) : Color.clear)
+                        .frame(width: 60, height: 40)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(isSelected ? color : Color.secondary.opacity(0.3), lineWidth: 2)
+                        )
+                    
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(isSelected ? color : .secondary)
+                }
+                
+                VStack(spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(isSelected ? color : .primary)
+                    
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(.vertical, 16)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? color.opacity(0.05) : Color(NSColor.controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isSelected ? color.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: isSelected ? 2 : 1)
+                    )
+            )
+            .animation(.easeInOut(duration: 0.2), value: isSelected)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -472,9 +702,27 @@ struct CompletedView: View {
                 }
             }
             
-            Button("Go Back", action: onGoBack)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+            // Updated Go Back button styling
+            Button(action: onGoBack) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.left")
+                    Text("Go Back")
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(
+                        colors: [Color.blue, Color.blue.opacity(0.8)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .shadow(color: .blue.opacity(0.3), radius: 4, x: 0, y: 2)
+            }
+            .buttonStyle(.plain)
         }
         .padding(30)
     }
