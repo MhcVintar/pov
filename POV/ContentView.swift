@@ -101,7 +101,6 @@ enum OutputQuality: String, CaseIterable {
 
 struct ContentView: View {
     @State private var appState: AppState = .fileSelection
-    @State private var selectedFilePath: String = "No file selected"
     @State private var selectedVideoURL: URL?
     @State private var processingProgress: Float = 0.0
     @State private var processingError: String?
@@ -125,7 +124,6 @@ struct ContentView: View {
                 
             case .fileSelected:
                 FileSelectedView(
-                    selectedFilePath: selectedFilePath,
                     videoInfo: videoInfo,
                     selectedOrientation: $selectedOrientation,
                     selectedOutputQuality: $selectedOutputQuality,
@@ -196,7 +194,6 @@ struct ContentView: View {
     }
     
     private func handleSelectedFile(url: URL) {
-        selectedFilePath = url.path
         selectedVideoURL = url
         processingError = nil
         processingProgress = 0.0
@@ -219,11 +216,8 @@ struct ContentView: View {
                 let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
                 let duration = try await asset.load(.duration)
                 
-                // Parse file name
-                let name = url.deletingPathExtension().lastPathComponent
+                // Get file extension for format display
                 let ext = url.pathExtension
-                var shortName = name.count > 25 ? String(name.prefix(19)) + "..." + String(name.suffix(3)) : name
-                shortName = "\(shortName).\(ext)"
                 
                 // Calculate actual dimensions considering transform
                 let transformedSize = naturalSize.applying(transform)
@@ -231,10 +225,10 @@ struct ContentView: View {
                 
                 await MainActor.run {
                     self.videoInfo = VideoInfo(
-                        name: shortName,
                         resolution: inputSize,
                         duration: duration.seconds,
-                        frameRate: Double(nominalFrameRate)
+                        frameRate: Double(nominalFrameRate),
+                        format: ext.uppercased()
                     )
                 }
             } catch {
@@ -311,7 +305,6 @@ struct ContentView: View {
     }
     
     private func clearSelection() {
-        selectedFilePath = "No file selected"
         selectedVideoURL = nil
         processingError = nil
         processingProgress = 0.0
@@ -320,7 +313,6 @@ struct ContentView: View {
     }
     
     private func goBackToStart() {
-        selectedFilePath = "No file selected"
         selectedVideoURL = nil
         processingError = nil
         processingProgress = 0.0
@@ -449,7 +441,6 @@ struct FileSelectionView: View {
 }
 
 struct FileSelectedView: View {
-    let selectedFilePath: String
     let videoInfo: VideoInfo?
     @Binding var selectedOrientation: Orientation
     @Binding var selectedOutputQuality: OutputQuality
@@ -458,70 +449,51 @@ struct FileSelectedView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            // Video Info Card
             if let info = videoInfo {
-                VStack(spacing: 16) {
-                    // Header with video name
-                    VStack(spacing: 4) {
-                        Text(info.name)
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .lineLimit(1)
-                        
-                        Text("Ready to process")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                VStack(spacing: 12) {
+                    Text("Video Information")
+                        .font(.headline)
+                        .fontWeight(.semibold)
                     
-                    // Video specs in a grid
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: 12) {
-                        VideoSpecCard(
-                            icon: "viewfinder",
-                            title: "Resolution",
-                            value: "\(Int(info.resolution.width)) × \(Int(info.resolution.height))",
-                            color: .blue
-                        )
+                    VStack(spacing: 8) {
+                        HStack(spacing: 12) {
+                            VideoInfoCard(
+                                icon: "viewfinder",
+                                title: "Resolution",
+                                value: "\(Int(info.resolution.width)) × \(Int(info.resolution.height))",
+                                color: .blue
+                            )
+                            
+                            VideoInfoCard(
+                                icon: "clock.fill",
+                                title: "Duration",
+                                value: formatDuration(info.duration),
+                                color: .green
+                            )
+                        }
                         
-                        VideoSpecCard(
-                            icon: "clock.fill",
-                            title: "Duration",
-                            value: formatDuration(info.duration),
-                            color: .green
-                        )
-                        
-                        VideoSpecCard(
-                            icon: "speedometer",
-                            title: "Frame Rate",
-                            value: "\(String(format: "%.0f", info.frameRate)) fps",
-                            color: .orange
-                        )
-                        
-                        VideoSpecCard(
-                            icon: "doc.fill",
-                            title: "Format",
-                            value: info.name.components(separatedBy: ".").last?.uppercased() ?? "VIDEO",
-                            color: .purple
-                        )
+                        HStack(spacing: 12) {
+                            VideoInfoCard(
+                                icon: "speedometer",
+                                title: "Frame Rate",
+                                value: "\(String(format: "%.0f", info.frameRate)) fps",
+                                color: .orange
+                            )
+                            
+                            VideoInfoCard(
+                                icon: "doc.fill",
+                                title: "Format",
+                                value: info.format,
+                                color: .purple
+                            )
+                        }
                     }
                 }
-                .padding(20)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(NSColor.controlBackgroundColor))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
-                )
             }
             
             // Orientation Selection
             VStack(spacing: 12) {
-                Text("Choose Orientation")
+                Text("Output Orientation")
                     .font(.headline)
                     .fontWeight(.semibold)
                 
@@ -664,45 +636,49 @@ struct QualityModeCard: View {
     }
 }
 
-struct VideoSpecCard: View {
+struct VideoInfoCard: View {
     let icon: String
     let title: String
     let value: String
     let color: Color
     
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 12) {
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: 12)
                     .fill(color.opacity(0.15))
-                    .frame(width: 32, height: 32)
+                    .frame(width: 60, height: 40)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(color, lineWidth: 2)
+                    )
                 
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 20, weight: .medium))
                     .foregroundColor(color)
             }
             
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fontWeight(.medium)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.primary)
                 
                 Text(value)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.primary)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 16)
+        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(NSColor.windowBackgroundColor))
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(NSColor.controlBackgroundColor))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(color.opacity(0.2), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
                 )
         )
     }
@@ -885,56 +861,11 @@ struct CompletedView: View {
     }
 }
 
-struct VideoInfoView: View {
-    let videoInfo: VideoInfo
-    let orientation: Orientation
-    
-    var body: some View {
-        VStack(alignment: .center, spacing: 6) {
-            Text("Video Information:")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            
-            InfoRow(label: "Name:", value: "\(videoInfo.name)")
-            InfoRow(label: "Resolution:", value: "\(Int(videoInfo.resolution.width)) × \(Int(videoInfo.resolution.height))")
-            InfoRow(label: "Duration:", value: formatDuration(videoInfo.duration))
-            InfoRow(label: "Frame Rate:", value: "\(String(format: "%.1f", videoInfo.frameRate)) fps")
-        }
-        .padding(12)
-        .background(Color.blue.opacity(0.05))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.blue.opacity(0.2), lineWidth: 1)
-        )
-    }
-    
-    private func formatDuration(_ seconds: Double) -> String {
-        let minutes = Int(seconds) / 60
-        let remainingSeconds = Int(seconds) % 60
-        return String(format: "%d:%02d", minutes, remainingSeconds)
-    }
-}
-
-struct InfoRow: View {
-    let label: String
-    let value: String
-    
-    var body: some View {
-        HStack {
-            Text(label)
-            Text(value)
-                .fontWeight(.medium)
-        }
-        .font(.callout)
-    }
-}
-
 struct VideoInfo {
-    let name: String
     let resolution: CGSize
     let duration: Double
     let frameRate: Double
+    let format: String
 }
 
 #Preview {
