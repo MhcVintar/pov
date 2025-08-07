@@ -2,6 +2,13 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
+struct VideoInfo {
+    let resolution: CGSize
+    let duration: Double
+    let frameRate: Double
+    let format: String
+}
+
 enum AppState {
     case fileSelection
     case fileSelected
@@ -859,13 +866,6 @@ struct CompletedView: View {
         }
         .padding(30)
     }
-}
-
-struct VideoInfo {
-    let resolution: CGSize
-    let duration: Double
-    let frameRate: Double
-    let format: String
 }
 
 #Preview {
