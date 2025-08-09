@@ -162,7 +162,7 @@ struct ContentView: View {
                     )
                 }
             }
-            .padding(5)
+            .padding(.top, 2)
         }
         .sheet(isPresented: $showingDocumentPicker) {
             DocumentPicker { url in
