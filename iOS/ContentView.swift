@@ -1,7 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
-import UIKit
+import Photos
 import PhotosUI
 
 struct VideoInfo {
@@ -117,125 +117,228 @@ struct ContentView: View {
     @State private var processingStartTime = Date()
     @State private var selectedOrientation: Orientation = .horizontal
     @State private var selectedOutputQuality: OutputQuality = .k27
-    @State private var showingPhotoPicker = false
-    @State private var showingFilePicker = false
-    @State private var outputURL: URL?
-
+    @State private var showingDocumentPicker = false
+    @State private var showingPermissionAlert = false
+    @State private var permissionAlertMessage = ""
+    
     var body: some View {
-        VStack(spacing: 16) {
-            switch appState {
-            case .fileSelection:
-                FileSelectionView(onSelectFile: {
-                    showingPicker = true
-                })
-
-            case .fileSelected:
-                FileSelectedView(
-                    videoInfo: videoInfo,
-                    selectedOrientation: $selectedOrientation,
-                    selectedOutputQuality: $selectedOutputQuality,
-                    onClear: { clearSelection() },
-                    onProcess: { processAndSaveVideo() }
-                )
-
-            case .processing:
-                ProcessingView(
-                    processingProgress: processingProgress,
-                    estimatedTimeRemaining: estimatedTimeRemaining(),
-                    orientation: selectedOrientation,
-                    outputQuality: selectedOutputQuality
-                )
-
-            case .completed:
-                CompletedView(processingError: processingError) {
-                    goBackToStart()
+        NavigationView {
+            VStack(spacing: 16) {
+                switch appState {
+                case .fileSelection:
+                    FileSelectionView(
+                        onSelectFile: {
+                            showingDocumentPicker = true
+                        }
+                    )
+                    
+                case .fileSelected:
+                    FileSelectedView(
+                        videoInfo: videoInfo,
+                        selectedOrientation: $selectedOrientation,
+                        selectedOutputQuality: $selectedOutputQuality,
+                        onClear: {
+                            clearSelection()
+                        },
+                        onProcess: {
+                            processAndSaveVideo()
+                        }
+                    )
+                    
+                case .processing:
+                    ProcessingView(
+                        processingProgress: processingProgress,
+                        estimatedTimeRemaining: estimatedTimeRemaining(),
+                        orientation: selectedOrientation,
+                        outputQuality: selectedOutputQuality
+                    )
+                    
+                case .completed:
+                    CompletedView(
+                        processingError: processingError,
+                        onGoBack: {
+                            goBackToStart()
+                        }
+                    )
                 }
             }
+            .padding(20)
+            .navigationTitle("POV")
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .sheet(isPresented: $showingPhotoPicker) {
-            PhotoPicker { url in
-                if let url = url {
-                    handleSelectedFile(url: url)
-                }
-            }
-        }
-        .sheet(isPresented: $showingFilePicker) {
+        .sheet(isPresented: $showingDocumentPicker) {
             DocumentPicker { url in
-                if let url = url {
-                    handleSelectedFile(url: url)
+                handleSelectedFile(url: url)
+            }
+        }
+        .alert("Permission Required", isPresented: $showingPermissionAlert) {
+            Button("Settings") {
+                if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(settingsUrl)
                 }
             }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(permissionAlertMessage)
         }
     }
-
+    
     private func handleSelectedFile(url: URL) {
         selectedVideoURL = url
         processingError = nil
         processingProgress = 0.0
+        
+        // Load video information
+        loadVideoInfo(from: url)
+        
+        // Move to file selected state
         appState = .fileSelected
     }
-
+    
+    private func loadVideoInfo(from url: URL) {
+        Task {
+            do {
+                // Start accessing security-scoped resource
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                
+                let asset = AVURLAsset(url: url)
+                guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { return }
+                
+                let naturalSize = try await videoTrack.load(.naturalSize)
+                let transform = try await videoTrack.load(.preferredTransform)
+                let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
+                let duration = try await asset.load(.duration)
+                
+                // Get file extension for format display
+                let ext = url.pathExtension
+                
+                // Calculate actual dimensions considering transform
+                let transformedSize = naturalSize.applying(transform)
+                let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+                
+                await MainActor.run {
+                    self.videoInfo = VideoInfo(
+                        resolution: inputSize,
+                        duration: duration.seconds,
+                        frameRate: Double(nominalFrameRate),
+                        format: ext.uppercased()
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    self.processingError = "Failed to load video info: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    
     private func processAndSaveVideo() {
         guard let inputVideoURL = selectedVideoURL else { return }
         
-        // On iOS, save to temporary directory first
-        let filename = "processed_\(UUID().uuidString).mov"
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        
-        self.outputURL = output
-        startProcessing(inputURL: inputVideoURL, outputURL: output)
-    }
-
-    private func startProcessing(inputURL: URL, outputURL: URL) {
-        appState = .processing
-        processingError = nil
-        processingProgress = 0.0
-        processingStartTime = Date()
-
-        Task {
-            await self.processVideo(inputURL: inputURL, outputURL: outputURL)
+        // Check photo library permission first
+        checkPhotoLibraryPermission { granted in
+            if granted {
+                self.startProcessing(inputURL: inputVideoURL)
+            } else {
+                self.permissionAlertMessage = "This app needs permission to save videos to your photo library. Please enable Photos access in Settings."
+                self.showingPermissionAlert = true
+            }
         }
     }
-
-    private func processVideo(inputURL: URL, outputURL: URL) async {
+    
+    private func checkPhotoLibraryPermission(completion: @escaping (Bool) -> Void) {
+        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        
+        switch status {
+        case .authorized, .limited:
+            completion(true)
+        case .denied, .restricted:
+            completion(false)
+        case .notDetermined:
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { newStatus in
+                DispatchQueue.main.async {
+                    completion(newStatus == .authorized || newStatus == .limited)
+                }
+            }
+        @unknown default:
+            completion(false)
+        }
+    }
+    
+    private func startProcessing(inputURL: URL) {
+        self.appState = .processing
+        self.processingError = nil
+        self.processingProgress = 0.0
+        self.processingStartTime = Date()
+        
+        Task {
+            await self.processVideo(inputURL: inputURL)
+        }
+    }
+    
+    private func processVideo(inputURL: URL) async {
         do {
+            // Create temporary output URL
+            let tempDirectory = FileManager.default.temporaryDirectory
+            let outputURL = tempDirectory.appendingPathComponent("processed_video.mov")
+            
+            // Remove any existing file
+            try? FileManager.default.removeItem(at: outputURL)
+            
             let videoProcessor = try VideoProcessor(
                 orientation: selectedOrientation,
                 outputQuality: selectedOutputQuality
             )
-
-            try await videoProcessor.convertVideo(inputURL: inputURL, outputURL: outputURL) { progress in
+            
+            try await videoProcessor.convertVideo(
+                inputURL: inputURL,
+                outputURL: outputURL
+            ) { progress in
+                // This closure is called from the video processor with progress updates
                 DispatchQueue.main.async {
                     self.processingProgress = progress
                 }
             }
-
-            // Save to Photos
-            await saveToPhotos(url: outputURL)
-
+            
+            // Save to photo library
+            try await saveVideoToPhotoLibrary(url: outputURL)
+            
             await MainActor.run {
-                appState = .completed
-                processingProgress = 1.0
+                self.appState = .completed
+                self.processingProgress = 1.0
+                
+                // Clean up temp file
+                try? FileManager.default.removeItem(at: outputURL)
             }
+            
         } catch {
             await MainActor.run {
-                appState = .completed
-                processingError = error.localizedDescription
-                processingProgress = 0.0
+                self.appState = .completed
+                self.processingError = error.localizedDescription
+                self.processingProgress = 0.0
             }
         }
     }
-
-    private func saveToPhotos(url: URL) async {
-        PHPhotoLibrary.shared().performChanges({
-            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-        }, completionHandler: { success, error in
-            if let error = error {
-                print("Error saving to Photos: \(error)")
+    
+    private func saveVideoToPhotoLibrary(url: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+            }) { success, error in
+                if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: error ?? NSError(domain: "VideoSaveError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to save video to photo library"]))
+                }
             }
-        })
+        }
     }
-
+    
     private func clearSelection() {
         selectedVideoURL = nil
         processingError = nil
@@ -243,16 +346,22 @@ struct ContentView: View {
         videoInfo = nil
         appState = .fileSelection
     }
-
+    
     private func goBackToStart() {
-        clearSelection()
+        selectedVideoURL = nil
+        processingError = nil
+        processingProgress = 0.0
+        videoInfo = nil
+        appState = .fileSelection
     }
-
+    
     private func estimatedTimeRemaining() -> String {
         guard processingProgress > 0.05 else { return "Calculating..." }
+        
         let elapsed = Date().timeIntervalSince(processingStartTime)
         let estimated = elapsed / Double(processingProgress)
         let remaining = estimated - elapsed
+        
         if remaining < 60 {
             return String(format: "~%.0f sec remaining", remaining)
         } else {
@@ -263,132 +372,85 @@ struct ContentView: View {
     }
 }
 
-struct PhotoPicker: UIViewControllerRepresentable {
-    var onPick: (URL?) -> Void
-    
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration(photoLibrary: .shared())
-        config.filter = .videos
-        config.selectionLimit = 1
-        let picker = PHPickerViewController(configuration: config)
-        picker.delegate = context.coordinator
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
-    }
-    
-    class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        var onPick: (URL?) -> Void
-        
-        init(onPick: @escaping (URL?) -> Void) {
-            self.onPick = onPick
-        }
-        
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            picker.dismiss(animated: true)
-            guard let provider = results.first?.itemProvider else {
-                onPick(nil)
-                return
-            }
-            
-            if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-                provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
-                    if let url = url {
-                        // Copy to temporary directory to keep it alive
-                        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                        try? FileManager.default.copyItem(at: url, to: tempURL)
-                        DispatchQueue.main.async {
-                            self.onPick(tempURL)
-                        }
-                    } else {
-                        DispatchQueue.main.async {
-                            self.onPick(nil)
-                        }
-                    }
-                }
-            } else {
-                onPick(nil)
-            }
-        }
-    }
-}
-
 struct DocumentPicker: UIViewControllerRepresentable {
-    var onPick: (URL?) -> Void
+    let onFileSelected: (URL) -> Void
     
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.movie, .video], asCopy: true)
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.movie, .video, .quickTimeMovie, .mpeg4Movie], asCopy: true)
         picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
         return picker
     }
     
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
+        Coordinator(self)
     }
     
     class Coordinator: NSObject, UIDocumentPickerDelegate {
-        var onPick: (URL?) -> Void
+        let parent: DocumentPicker
         
-        init(onPick: @escaping (URL?) -> Void) {
-            self.onPick = onPick
+        init(_ parent: DocumentPicker) {
+            self.parent = parent
         }
         
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            onPick(urls.first)
-        }
-        
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onPick(nil)
+            guard let url = urls.first else { return }
+            parent.onFileSelected(url)
         }
     }
 }
 
 struct FileSelectionView: View {
     let onSelectFile: () -> Void
-    let onSelectPhoto: () -> Void
     
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Select a video to get started")
-                .font(.title3)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            Button(action: onSelectFile) {
-                HStack(spacing: 8) {
-                    Image(systemName: "folder")
-                    Text("Browse Files")
-                }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(LinearGradient(colors: [Color.blue, Color.blue.opacity(0.8)], startPoint: .leading, endPoint: .trailing))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: .blue.opacity(0.3), radius: 4, x: 0, y: 2)
+        VStack(spacing: 30) {
+            VStack(spacing: 16) {
+                Image(systemName: "video.badge.plus")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+                
+                Text("Select a Video File")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                
+                Text("Choose a video file from your device to get started")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
             }
-            .padding(.horizontal, 20)
             
-            Button(action: onSelectPhoto) {
-                HStack(spacing: 8) {
-                    Image(systemName: "photo")
-                    Text("Browse Photos")
+            VStack(spacing: 16) {
+                Button(action: onSelectFile) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "folder")
+                            .font(.title2)
+                        Text("Browse Files")
+                            .font(.headline)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
                 }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(LinearGradient(colors: [Color.purple, Color.purple.opacity(0.8)], startPoint: .leading, endPoint: .trailing))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: .purple.opacity(0.3), radius: 4, x: 0, y: 2)
+                
+                Text("Supports MP4, MOV, AVI and other video formats")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal)
         }
     }
 }
@@ -401,15 +463,18 @@ struct FileSelectedView: View {
     let onProcess: () -> Void
     
     var body: some View {
-        VStack(spacing: 20) {
-            if let info = videoInfo {
-                VStack(spacing: 12) {
-                    Text("Video Information")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                    
-                    VStack(spacing: 8) {
-                        HStack(spacing: 12) {
+        ScrollView {
+            VStack(spacing: 24) {
+                if let info = videoInfo {
+                    VStack(spacing: 16) {
+                        Text("Video Information")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                        
+                        LazyVGrid(columns: [
+                            GridItem(.flexible()),
+                            GridItem(.flexible())
+                        ], spacing: 12) {
                             VideoInfoCard(
                                 icon: "viewfinder",
                                 title: "Resolution",
@@ -423,9 +488,7 @@ struct FileSelectedView: View {
                                 value: formatDuration(info.duration),
                                 color: .green
                             )
-                        }
-                        
-                        HStack(spacing: 12) {
+                            
                             VideoInfoCard(
                                 icon: "speedometer",
                                 title: "Frame Rate",
@@ -442,93 +505,90 @@ struct FileSelectedView: View {
                         }
                     }
                 }
-            }
-            
-            // Orientation Selection
-            VStack(spacing: 12) {
-                Text("Output Orientation")
-                    .font(.headline)
-                    .fontWeight(.semibold)
                 
-                HStack(spacing: 16) {
-                    ForEach(Orientation.allCases, id: \.self) { orientation in
-                        OrientationCard(
-                            orientation: orientation,
-                            isSelected: selectedOrientation == orientation
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                selectedOrientation = orientation
+                // Orientation Selection
+                VStack(spacing: 16) {
+                    Text("Output Orientation")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                    
+                    HStack(spacing: 16) {
+                        ForEach(Orientation.allCases, id: \.self) { orientation in
+                            OrientationCard(
+                                orientation: orientation,
+                                isSelected: selectedOrientation == orientation
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    selectedOrientation = orientation
+                                }
                             }
                         }
                     }
                 }
-            }
-            
-            // Output Quality Selection
-            VStack(spacing: 12) {
-                Text("Output Quality")
-                    .font(.headline)
-                    .fontWeight(.semibold)
                 
-                HStack(spacing: 12) {
-                    ForEach(OutputQuality.allCases, id: \.self) { quality in
-                        QualityModeCard(
-                            quality: quality,
-                            isSelected: selectedOutputQuality == quality
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                selectedOutputQuality = quality
+                // Output Quality Selection
+                VStack(spacing: 16) {
+                    Text("Output Quality")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                    
+                    VStack(spacing: 12) {
+                        ForEach(OutputQuality.allCases, id: \.self) { quality in
+                            QualityModeCard(
+                                quality: quality,
+                                isSelected: selectedOutputQuality == quality
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    selectedOutputQuality = quality
+                                }
                             }
                         }
                     }
                 }
-            }
-            
-            Spacer().frame(height: 8)
-            
-            // Action buttons
-            HStack(spacing: 12) {
-                Button(action: onClear) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Start Over")
-                    }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(uiColor: .systemBackground))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                
+                // Action buttons
+                VStack(spacing: 12) {
+                    Button(action: onProcess) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "play.fill")
+                            Text("Process Video")
+                        }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.blue, Color.blue.opacity(0.8)],
+                                startPoint: .leading,
+                                endPoint: .trailing
                             )
-                    )
-                }
-                .buttonStyle(.plain)
-                
-                Button(action: onProcess) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "play.fill")
-                        Text("Process Video")
-                    }
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.blue, Color.blue.opacity(0.8)],
-                            startPoint: .leading,
-                            endPoint: .trailing
                         )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .shadow(color: .blue.opacity(0.3), radius: 4, x: 0, y: 2)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
+                    }
+                    
+                    Button(action: onClear) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Start Over")
+                        }
+                        .font(.body)
+                        .foregroundColor(.blue)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.blue.opacity(0.1))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                )
+                        )
+                    }
                 }
-                .buttonStyle(.plain)
             }
+            .padding(.horizontal)
         }
     }
     
@@ -546,38 +606,45 @@ struct QualityModeCard: View {
     
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 12) {
+            HStack(spacing: 16) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(isSelected ? quality.color.opacity(0.15) : Color.clear)
-                        .frame(width: 60, height: 40)
+                        .frame(width: 50, height: 40)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(isSelected ? quality.color : Color.secondary.opacity(0.3), lineWidth: 2)
                         )
                     
                     Image(systemName: quality.icon)
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.title2)
                         .foregroundColor(isSelected ? quality.color : .secondary)
                 }
                 
-                VStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(quality.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.headline)
                         .foregroundColor(isSelected ? quality.color : .primary)
                     
                     Text(quality.description)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
+                }
+                
+                Spacer()
+                
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(quality.color)
                 }
             }
-            .padding(.vertical, 16)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? quality.color.opacity(0.05) : Color(uiColor: .systemBackground))
+                    .fill(isSelected ? quality.color.opacity(0.05) : Color(UIColor.systemBackground))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(isSelected ? quality.color.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: isSelected ? 2 : 1)
@@ -600,35 +667,37 @@ struct VideoInfoCard: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(color.opacity(0.15))
-                    .frame(width: 60, height: 40)
+                    .frame(width: 50, height: 40)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(color, lineWidth: 2)
                     )
                 
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.title2)
                     .foregroundColor(color)
             }
             
             VStack(spacing: 4) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.primary)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
                 
                 Text(value)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
                     .multilineTextAlignment(.center)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
         }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(uiColor: .systemBackground))
+                .fill(Color(UIColor.systemBackground))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(Color.primary.opacity(0.1), lineWidth: 1)
@@ -655,13 +724,14 @@ struct OrientationCard: View {
                         )
                     
                     Image(systemName: orientation.icon)
-                        .font(.system(size: 20, weight: .medium))
+                        .font(.title2)
                         .foregroundColor(isSelected ? orientation.color : .secondary)
                 }
                 
                 VStack(spacing: 4) {
                     Text(orientation.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
                         .foregroundColor(isSelected ? orientation.color : .primary)
                     
                     Text(orientation.description)
@@ -675,7 +745,7 @@ struct OrientationCard: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? orientation.color.opacity(0.05) : Color(uiColor: .systemBackground))
+                    .fill(isSelected ? orientation.color.opacity(0.05) : Color(UIColor.systemBackground))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(isSelected ? orientation.color.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: isSelected ? 2 : 1)
@@ -694,12 +764,13 @@ struct ProcessingView: View {
     let outputQuality: OutputQuality
     
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 24) {
             Text("Processing Video...")
                 .font(.title2)
+                .fontWeight(.semibold)
                 .foregroundColor(.blue)
             
-            VStack(spacing: 4) {
+            VStack(spacing: 8) {
                 Text("Orientation: \(orientation.displayName)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
@@ -713,23 +784,23 @@ struct ProcessingView: View {
             ZStack {
                 // Background circle
                 Circle()
-                    .stroke(Color.blue.opacity(0.2), lineWidth: 10)
-                    .frame(width: 100, height: 100)
+                    .stroke(Color.blue.opacity(0.2), lineWidth: 12)
+                    .frame(width: 120, height: 120)
                 
                 // Progress circle
                 Circle()
                     .trim(from: 0, to: CGFloat(processingProgress))
                     .stroke(
                         Color.blue,
-                        style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                        style: StrokeStyle(lineWidth: 12, lineCap: .round)
                     )
-                    .frame(width: 100, height: 100)
-                    .rotationEffect(.degrees(-90)) // Start from top
+                    .frame(width: 120, height: 120)
+                    .rotationEffect(.degrees(-90))
                     .animation(.easeInOut(duration: 0.3), value: processingProgress)
                 
                 // Percentage text in center
                 Text("\(Int(processingProgress * 100))%")
-                    .font(.title2)
+                    .font(.title)
                     .fontWeight(.bold)
                     .foregroundColor(.blue)
             }
@@ -739,6 +810,12 @@ struct ProcessingView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
+            
+            Text("Video will be saved to Photos when complete")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
         }
         .padding(30)
     }
@@ -749,12 +826,12 @@ struct CompletedView: View {
     let onGoBack: () -> Void
     
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 24) {
             if let error = processingError {
                 // Error state
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 48))
+                        .font(.system(size: 60))
                         .foregroundColor(.red)
                     
                     Text("Processing Failed")
@@ -763,16 +840,16 @@ struct CompletedView: View {
                         .foregroundColor(.red)
                     
                     Text(error)
-                        .font(.subheadline)
+                        .font(.body)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal)
                 }
             } else {
                 // Success state
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 48))
+                        .font(.system(size: 60))
                         .foregroundColor(.green)
                     
                     Text("Video Processed Successfully!")
@@ -781,23 +858,23 @@ struct CompletedView: View {
                         .foregroundColor(.green)
                         .multilineTextAlignment(.center)
                     
-                    Text("Your video has been saved successfully.")
-                        .font(.subheadline)
+                    Text("Your processed video has been saved to Photos.")
+                        .font(.body)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 }
             }
             
-            // Updated Go Back button styling
             Button(action: onGoBack) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.left")
-                    Text("Go Back")
+                    Text("Process Another Video")
                 }
-                .font(.system(size: 14, weight: .semibold))
+                .font(.headline)
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .padding(.vertical, 16)
                 .background(
                     LinearGradient(
                         colors: [Color.blue, Color.blue.opacity(0.8)],
@@ -805,10 +882,9 @@ struct CompletedView: View {
                         endPoint: .trailing
                     )
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .shadow(color: .blue.opacity(0.3), radius: 4, x: 0, y: 2)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
             }
-            .buttonStyle(.plain)
         }
         .padding(30)
     }
