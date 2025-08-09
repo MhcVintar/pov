@@ -162,9 +162,7 @@ struct ContentView: View {
                     )
                 }
             }
-            .padding(20)
-            .navigationTitle("POV")
-            .navigationBarTitleDisplayMode(.inline)
+            .padding(5)
         }
         .sheet(isPresented: $showingDocumentPicker) {
             DocumentPicker { url in
@@ -463,7 +461,7 @@ struct FileSelectedView: View {
     let onProcess: () -> Void
     
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(spacing: 24) {
                 if let info = videoInfo {
                     VStack(spacing: 16) {
