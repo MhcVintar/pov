@@ -809,7 +809,7 @@ struct ProcessingView: View {
                     .foregroundColor(.secondary)
             }
             
-            Text("Video will be saved to Photos when complete")
+            Text("Make sure to stay on current screen")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
