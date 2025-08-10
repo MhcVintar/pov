@@ -763,7 +763,7 @@ struct ProcessingView: View {
     
     var body: some View {
         VStack(spacing: 24) {
-            Text("Processing Video...")
+            Text("Processing Video")
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.blue)

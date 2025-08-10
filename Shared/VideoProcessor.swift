@@ -223,96 +223,82 @@ class VideoProcessor {
         let totalFrames = Int(duration.seconds * Double(nominalFrameRate))
         var processedFrames = 0
         
-        try await withThrowingTaskGroup(of: Void.self) { group in
+        // Track progress of video and audio processing
+
+        while reader.status == .reading {
+            // Process video sample
+            if videoWriterInput.isReadyForMoreMediaData {
+                if let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() {
+                    guard let inputPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                        continue
+                    }
+                    
+                    let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                    
+                    var outputPixelBuffer: CVPixelBuffer
+                    switch self.orientation {
+                    case .horizontal:
+                        outputPixelBuffer = try await self.processHorizontalFrame(
+                            inputPixelBuffer: inputPixelBuffer,
+                            inputSize: inputSize,
+                            intermediateSize: intermediateSize,
+                            outputSize: outputSize,
+                            downscale: downscale
+                        )
+                    case .vertical:
+                        outputPixelBuffer = try await self.processVerticalFrame(
+                            inputPixelBuffer: inputPixelBuffer,
+                            inputSize: inputSize,
+                            intermediateSize: intermediateSize,
+                            outputSize: outputSize,
+                            downscale: downscale
+                        )
+                    }
+                    
+                    if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
+                        print("Failed to append pixel buffer at time: \(presentationTime)")
+                    }
+                    
+                    processedFrames += 1
+                    let progress = Float(processedFrames) / Float(totalFrames)
+                    await MainActor.run {
+                        progressCallback(min(progress, 1.0))
+                    }
+                } else {
+                    videoWriterInput.markAsFinished()
+                }
+                
+            } else {
+                // Wait a bit if writer isn't ready
+                try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+            }
             
-            // Process video frames
-            group.addTask {
-                while reader.status == .reading {
-                    if videoWriterInput.isReadyForMoreMediaData {
-                        guard let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() else {
-                            break
-                        }
-                        
-                        guard let inputPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                            continue
-                        }
-                        
+            // Process audio sample
+            if audioWriterInput.isReadyForMoreMediaData {
+                if let sampleBuffer = audioReaderOutput.copyNextSampleBuffer() {
+                    if !audioWriterInput.append(sampleBuffer) {
                         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                        
-                        var outputPixelBuffer: CVPixelBuffer
-                        switch self.orientation {
-                        case .horizontal:
-                            outputPixelBuffer = try await self.processHorizontalFrame(
-                                inputPixelBuffer: inputPixelBuffer,
-                                inputSize: inputSize,
-                                intermediateSize: intermediateSize,
-                                outputSize: outputSize,
-                                downscale: downscale
-                            )
-                        case .vertical:
-                            outputPixelBuffer = try await self.processVerticalFrame(
-                                inputPixelBuffer: inputPixelBuffer,
-                                inputSize: inputSize,
-                                intermediateSize: intermediateSize,
-                                outputSize: outputSize,
-                                downscale: downscale
-                            )
-                        }
-                        
-                        if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
-                            print("Failed to append pixel buffer at time: \(presentationTime)")
-                        }
-                        
-                        processedFrames += 1
-                        let progress = Float(processedFrames) / Float(totalFrames)
-                        await MainActor.run {
-                            progressCallback(min(progress, 1.0))
-                        }
-                        
-                    } else {
-                        // Wait a bit if writer isn't ready
-                        try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                        print("Failed to append audio sample at time: \(presentationTime)")
                     }
+                } else {
+                    audioWriterInput.markAsFinished()
                 }
                 
-                videoWriterInput.markAsFinished()
+            } else {
+                // Wait a bit if writer isn't ready
+                try await Task.sleep(nanoseconds: 10_000_000) // 10ms
             }
-            
-            // Process audio samples
-            group.addTask {
-                while reader.status == .reading {
-                    if audioWriterInput.isReadyForMoreMediaData {
-                        guard let sampleBuffer = audioReaderOutput.copyNextSampleBuffer() else {
-                            break
-                        }
-                        
-                        if !audioWriterInput.append(sampleBuffer) {
-                            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                            print("Failed to append audio sample at time: \(presentationTime)")
-                        }
-                        
-                    } else {
-                        // Wait a bit if writer isn't ready
-                        try await Task.sleep(nanoseconds: 10_000_000) // 10ms
-                    }
-                }
-                
-                audioWriterInput.markAsFinished()
-            }
-            
-            // Wait for all tasks to complete
-            try await group.waitForAll()
         }
         
         // Finish writing
         await writer.finishWriting()
         
-        if let error = writer.error {
-            throw VideoProcessorError.writerFailed(error.localizedDescription)
-        }
-        
         if let error = reader.error {
             throw VideoProcessorError.readerFailed(error.localizedDescription)
+        }
+
+        if let error = writer.error {
+            throw VideoProcessorError.writerFailed(error.localizedDescription)
         }
     }
     
