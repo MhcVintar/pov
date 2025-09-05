@@ -14,6 +14,7 @@ class VideoProcessor {
     private let cropPipelineState: MTLComputePipelineState
     private let textureSampler: MTLSamplerState
     private let textureCache: CVMetalTextureCache
+    private var pixelBufferPool: CVPixelBufferPool?
     
     init(orientation: Orientation, outputQuality: OutputQuality) throws {
         self.orientation = orientation
@@ -158,6 +159,19 @@ class VideoProcessor {
             outputSize = CGSize(width: intermediateSize.height * 3/4, height: intermediateSize.height * 4/3)
         }
         
+        // Create pixel buffer pool
+        let poolAttrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            kCVPixelBufferWidthKey as String: Int(outputSize.width),
+            kCVPixelBufferHeightKey as String: Int(outputSize.height),
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+
+        var pool: CVPixelBufferPool?
+        CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, poolAttrs as CFDictionary, &pool)
+        self.pixelBufferPool = pool
+        
         // Calculate bitrate accounting for resolution change
         let resolutionRatio = (outputSize.width * outputSize.height) / (inputSize.width * inputSize.height)
         let targetBitrate = Int(Double(estimatedDataRate) * resolutionRatio)
@@ -224,7 +238,6 @@ class VideoProcessor {
         var processedFrames = 0
         
         // Track progress of video and audio processing
-
         while reader.status == .reading {
             // Process video sample
             if videoWriterInput.isReadyForMoreMediaData {
@@ -386,24 +399,18 @@ class VideoProcessor {
             throw VideoProcessorError.textureCreationFailed("Failed to create input YUV textures for \(shaderName)")
         }
         
-        // Create output pixel buffer in YUV420 10-bit format
+        // Get pixel buffer pool
+        guard let pool = pixelBufferPool else {
+            throw VideoProcessorError.pixelBufferCreationFailed
+        }
+
         var outputPixelBuffer: CVPixelBuffer?
-        let result = CVPixelBufferCreate(
-            kCFAllocatorDefault,
-            Int(outputSize.width),
-            Int(outputSize.height),
-            kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-            [
-                kCVPixelBufferMetalCompatibilityKey: true,
-                kCVPixelBufferIOSurfacePropertiesKey: [:]
-            ] as CFDictionary,
-            &outputPixelBuffer
-        )
-        
+        let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputPixelBuffer)
+
         guard result == kCVReturnSuccess, let outputBuffer = outputPixelBuffer else {
             throw VideoProcessorError.pixelBufferCreationFailed
         }
-        
+
         // Create output textures
         guard let outputYTexture = createYTexture(from: outputBuffer),
               let outputUVTexture = createUVTexture(from: outputBuffer) else {
