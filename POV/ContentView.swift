@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AudioToolbox
 import UniformTypeIdentifiers
 import Photos
 import PhotosUI
@@ -298,6 +299,10 @@ struct ContentView: View {
                 // Save to photo library
                 try await saveVideoToPhotoLibrary(url: outputURL)
                 
+                // Play alert sound and vibrate
+                AudioServicesPlayAlertSoundWithCompletion(1016, nil)
+                AudioServicesPlaySystemSoundWithCompletion(kSystemSoundID_Vibrate, nil)
+
                 await MainActor.run {
                     self.navigationPath = NavigationPath([NavigationDestination.completed])
                     self.processingProgress = 1.0
