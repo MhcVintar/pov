@@ -513,9 +513,9 @@ struct FileSelectedView: View {
                         .font(.headline)
                         .fontWeight(.semibold)
                     
-                    VStack(spacing: 12) {
+                    HStack(spacing: 16) {
                         ForEach(OutputQuality.allCases, id: \.self) { quality in
-                            QualityModeCard(
+                            QualityCard(
                                 quality: quality,
                                 isSelected: selectedOutputQuality == quality
                             ) {
@@ -559,18 +559,18 @@ struct FileSelectedView: View {
     }
 }
 
-struct QualityModeCard: View {
+struct QualityCard: View {
     let quality: OutputQuality
     let isSelected: Bool
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            VStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(isSelected ? quality.color.opacity(0.15) : Color.clear)
-                        .frame(width: 50, height: 40)
+                        .frame(width: 60, height: 40)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(isSelected ? quality.color : Color.secondary.opacity(0.3), lineWidth: 2)
@@ -581,26 +581,20 @@ struct QualityModeCard: View {
                         .foregroundColor(isSelected ? quality.color : .secondary)
                 }
                 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(spacing: 4) {
                     Text(quality.displayName)
-                        .font(.headline)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
                         .foregroundColor(isSelected ? quality.color : .primary)
                     
                     Text(quality.description)
-                        .font(.subheadline)
+                        .font(.caption)
                         .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(quality.color)
+                        .multilineTextAlignment(.center)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12)
