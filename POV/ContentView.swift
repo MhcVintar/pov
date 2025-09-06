@@ -111,6 +111,7 @@ struct ContentView: View {
     @State private var navigationPath = NavigationPath()
     @State private var selectedVideoURL: URL?
     @State private var processingProgress: Float = 0.0
+    @State private var processingCancelled: Bool = false
     @State private var processingError: String?
     @State private var videoInfo: VideoInfo?
     @State private var processingStartTime = Date()
@@ -145,6 +146,9 @@ struct ContentView: View {
                         orientation: selectedOrientation,
                         outputQuality: selectedOutputQuality
                     )
+                    .onDisappear() {
+                        processingCancelled = true
+                    }
                 case .completed:
                     CompletedView(
                         processingError: processingError,
@@ -173,6 +177,7 @@ struct ContentView: View {
         selectedVideoURL = url
         processingError = nil
         processingProgress = 0.0
+        processingCancelled = false
         loadVideoInfo(from: url)
         navigationPath.append(NavigationDestination.fileSelected)
     }
@@ -256,6 +261,7 @@ struct ContentView: View {
         navigationPath.append(NavigationDestination.processing)
         processingError = nil
         processingProgress = 0.0
+        processingCancelled = false
         processingStartTime = Date()
         
         Task {
@@ -279,7 +285,8 @@ struct ContentView: View {
             
             try await videoProcessor.convertVideo(
                 inputURL: inputURL,
-                outputURL: outputURL
+                outputURL: outputURL,
+                isCancelled: { self.processingCancelled }
             ) { progress in
                 // This closure is called from the video processor with progress updates
                 DispatchQueue.main.async {
@@ -287,14 +294,18 @@ struct ContentView: View {
                 }
             }
             
-            // Save to photo library
-            try await saveVideoToPhotoLibrary(url: outputURL)
-            
-            await MainActor.run {
-                self.navigationPath = NavigationPath([NavigationDestination.completed])
-                self.processingProgress = 1.0
+            if !self.processingCancelled {
+                // Save to photo library
+                try await saveVideoToPhotoLibrary(url: outputURL)
                 
-                // Clean up temp file
+                await MainActor.run {
+                    self.navigationPath = NavigationPath([NavigationDestination.completed])
+                    self.processingProgress = 1.0
+                }
+            }
+            
+            // Clean up temp file
+            await MainActor.run {
                 try? FileManager.default.removeItem(at: outputURL)
             }
             

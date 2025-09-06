@@ -101,7 +101,12 @@ class VideoProcessor {
         }
     }
     
-    func convertVideo(inputURL: URL, outputURL: URL, progressCallback: @escaping (Float) -> Void) async throws {
+    func convertVideo(
+        inputURL: URL,
+        outputURL: URL,
+        isCancelled: () -> Bool,
+        progressCallback: @escaping (Float) -> Void
+    ) async throws {
         let asset = AVURLAsset(url: inputURL)
         
         // Get video track
@@ -238,7 +243,7 @@ class VideoProcessor {
         var processedFrames = 0
         
         // Track progress of video and audio processing
-        while reader.status == .reading {
+        while reader.status == .reading && !isCancelled() {
             // Process video sample
             if videoWriterInput.isReadyForMoreMediaData {
                 if let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() {
@@ -283,7 +288,7 @@ class VideoProcessor {
                 
             } else {
                 // Wait a bit if writer isn't ready
-                try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                try await Task.sleep(nanoseconds: 5_000_000) // 5ms
             }
             
             // Process audio sample
@@ -299,8 +304,16 @@ class VideoProcessor {
                 
             } else {
                 // Wait a bit if writer isn't ready
-                try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                try await Task.sleep(nanoseconds: 5_000_000) // 5ms
             }
+        }
+        
+        // Handle cancellation
+        if isCancelled() {
+            reader.cancelReading()
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: outputURL)
+            return
         }
         
         // Finish writing
