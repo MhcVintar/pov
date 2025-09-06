@@ -14,7 +14,7 @@ class VideoProcessor {
     private let cropPipelineState: MTLComputePipelineState
     private let textureSampler: MTLSamplerState
     private let textureCache: CVMetalTextureCache
-    private var pixelBufferPool: CVPixelBufferPool?
+    private var pixelBufferPools: [CGSize: CVPixelBufferPool] = [:]
     
     init(orientation: Orientation, outputQuality: OutputQuality) throws {
         self.orientation = orientation
@@ -164,18 +164,22 @@ class VideoProcessor {
             outputSize = CGSize(width: intermediateSize.height * 3/4, height: intermediateSize.height * 4/3)
         }
         
-        // Create pixel buffer pool
-        let poolAttrs: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-            kCVPixelBufferWidthKey as String: Int(outputSize.width),
-            kCVPixelBufferHeightKey as String: Int(outputSize.height),
-            kCVPixelBufferMetalCompatibilityKey as String: true,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
-        ]
-
-        var pool: CVPixelBufferPool?
-        CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, poolAttrs as CFDictionary, &pool)
-        self.pixelBufferPool = pool
+        // Create pixel buffer pools
+        self.pixelBufferPools = [:]
+        
+        for pixelBufferSize in [inputSize, intermediateSize, outputSize] {
+            let poolAttrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                kCVPixelBufferWidthKey as String: Int(pixelBufferSize.width),
+                kCVPixelBufferHeightKey as String: Int(pixelBufferSize.height),
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+            ]
+            
+            var pool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, poolAttrs as CFDictionary, &pool)
+            self.pixelBufferPools[pixelBufferSize] = pool
+        }
         
         // Calculate bitrate accounting for resolution change
         let resolutionRatio = (outputSize.width * outputSize.height) / (inputSize.width * inputSize.height)
@@ -413,7 +417,7 @@ class VideoProcessor {
         }
         
         // Get pixel buffer pool
-        guard let pool = pixelBufferPool else {
+        guard let pool = pixelBufferPools[outputSize] else {
             throw VideoProcessorError.pixelBufferCreationFailed
         }
 
