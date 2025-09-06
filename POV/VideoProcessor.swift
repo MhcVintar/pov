@@ -148,7 +148,7 @@ class VideoProcessor {
                 height: inputSize.height * downscaleRatio
             )
         case .vertical:
-            let cropRatio = CGFloat(7.0/8.0)
+            let cropRatio = CGFloat(3.0/4.0)
             intermediateSize = CGSize(
                 width: inputSize.height * cropRatio,
                 height: inputSize.height
