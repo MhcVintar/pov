@@ -147,7 +147,11 @@ struct ContentView: View {
                         orientation: selectedOrientation,
                         outputQuality: selectedOutputQuality
                     )
+                    .onAppear() {
+                        UIApplication.shared.isIdleTimerDisabled = true
+                    }
                     .onDisappear() {
+                        UIApplication.shared.isIdleTimerDisabled = false
                         processingCancelled = true
                     }
                 case .completed:
