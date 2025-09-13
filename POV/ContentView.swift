@@ -278,8 +278,11 @@ struct ContentView: View {
         do {
             // Create temporary output URL
             let tempDirectory = FileManager.default.temporaryDirectory
-            let outputURL = tempDirectory.appendingPathComponent("processed_video.mov")
-            
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
+            let dateString = dateFormatter.string(from: Date())
+            let outputURL = tempDirectory.appendingPathComponent("pov_\(dateString).MOV")
+
             // Remove any existing file
             try? FileManager.default.removeItem(at: outputURL)
             

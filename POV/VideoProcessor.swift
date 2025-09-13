@@ -148,7 +148,7 @@ class VideoProcessor {
                 height: inputSize.height * downscaleRatio
             )
         case .vertical:
-            let cropRatio = CGFloat(3.0/4.0)
+            let cropRatio = CGFloat(5.0/8.0)
             intermediateSize = CGSize(
                 width: inputSize.height * cropRatio,
                 height: inputSize.height
@@ -200,6 +200,11 @@ class VideoProcessor {
         // Setup writer with 10-bit HEVC encoding
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
         
+        // Preserve original creation date
+        if let creationDate = try await asset.load(.creationDate) {
+            writer.metadata.append(creationDate)
+        }
+
         // Create compression properties optimized for 10-bit content
         let compressionProperties: [String: Any] = [
             AVVideoAverageBitRateKey: targetBitrate,
