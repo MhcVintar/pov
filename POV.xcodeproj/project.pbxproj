@@ -95,7 +95,6 @@
 			mainGroup = A9C637E12E3804A3007EE24A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				A9C637F92E38086C007EE24A /* XCRemoteSwiftPackageReference "GPUImage3" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A9C637EB2E3804A3007EE24A /* Products */;
@@ -341,17 +340,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		A9C637F92E38086C007EE24A /* XCRemoteSwiftPackageReference "GPUImage3" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "git@github.com:BradLarson/GPUImage3.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
 	};
 	rootObject = A9C637E22E3804A3007EE24A /* Project object */;
 }

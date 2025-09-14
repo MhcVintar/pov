@@ -88,7 +88,7 @@ class VideoProcessor {
         } catch {
             throw VideoProcessorError.metalSetupFailed("Failed to create linear compute pipeline state: \(error)")
         }
-
+        
         // Create crop pipeline
         guard let CropFunction = defaultLibrary.makeFunction(name: "crop") else {
             throw VideoProcessorError.metalSetupFailed("Failed to find crop shader function")
@@ -204,7 +204,7 @@ class VideoProcessor {
         if let creationDate = try await asset.load(.creationDate) {
             writer.metadata.append(creationDate)
         }
-
+        
         // Create compression properties optimized for 10-bit content
         let compressionProperties: [String: Any] = [
             AVVideoAverageBitRateKey: targetBitrate,
@@ -331,7 +331,7 @@ class VideoProcessor {
         if let error = reader.error {
             throw VideoProcessorError.readerFailed(error.localizedDescription)
         }
-
+        
         if let error = writer.error {
             throw VideoProcessorError.writerFailed(error.localizedDescription)
         }
@@ -354,7 +354,7 @@ class VideoProcessor {
                 useSampler: true
             )
         }
-
+        
         intermediateBuffer = try await processFrameWithShader(
             inputPixelBuffer: intermediateBuffer,
             outputSize: intermediateSize,
@@ -407,7 +407,7 @@ class VideoProcessor {
         
         return outputBuffer
     }
-
+    
     private func processFrameWithShader(
         inputPixelBuffer: CVPixelBuffer,
         outputSize: CGSize,
@@ -425,14 +425,14 @@ class VideoProcessor {
         guard let pool = pixelBufferPools[outputSize] else {
             throw VideoProcessorError.pixelBufferCreationFailed
         }
-
+        
         var outputPixelBuffer: CVPixelBuffer?
         let result = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputPixelBuffer)
-
+        
         guard result == kCVReturnSuccess, let outputBuffer = outputPixelBuffer else {
             throw VideoProcessorError.pixelBufferCreationFailed
         }
-
+        
         // Create output textures
         guard let outputYTexture = createYTexture(from: outputBuffer),
               let outputUVTexture = createUVTexture(from: outputBuffer) else {

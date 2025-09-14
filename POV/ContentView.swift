@@ -282,7 +282,7 @@ struct ContentView: View {
             dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
             let dateString = dateFormatter.string(from: Date())
             let outputURL = tempDirectory.appendingPathComponent("pov_\(dateString).MOV")
-
+            
             // Remove any existing file
             try? FileManager.default.removeItem(at: outputURL)
             
@@ -309,7 +309,7 @@ struct ContentView: View {
                 // Play alert sound and vibrate
                 AudioServicesPlayAlertSoundWithCompletion(1016, nil)
                 AudioServicesPlaySystemSoundWithCompletion(kSystemSoundID_Vibrate, nil)
-
+                
                 await MainActor.run {
                     self.navigationPath = NavigationPath([NavigationDestination.completed])
                     self.processingProgress = 1.0
