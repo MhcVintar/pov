@@ -2,6 +2,7 @@ import AVFoundation
 import Metal
 import MetalKit
 import CoreVideo
+import Photos
 
 class VideoProcessor {
     private let metalDevice: MTLDevice
@@ -102,12 +103,12 @@ class VideoProcessor {
     }
     
     func convertVideo(
-        inputURL: URL,
+        inputAsset: PHAsset,
         outputURL: URL,
         isCancelled: () -> Bool,
         progressCallback: @escaping (Float) -> Void
     ) async throws {
-        let asset = AVURLAsset(url: inputURL)
+        let asset = try await getAVAsset(from: inputAsset)
         
         // Get video track
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
@@ -337,6 +338,29 @@ class VideoProcessor {
         }
     }
     
+    private func getAVAsset(from phAsset: PHAsset) async throws -> AVAsset {
+        return try await withCheckedThrowingContinuation { continuation in
+            let options = PHVideoRequestOptions()
+            options.version = .original
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = false
+            
+            PHImageManager.default().requestAVAsset(forVideo: phAsset, options: options) { avAsset, audioMix, info in
+                if let error = info?[PHImageErrorKey] as? Error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                guard let avAsset = avAsset else {
+                    continuation.resume(throwing: VideoProcessorError.failedToLoadAsset)
+                    return
+                }
+                
+                continuation.resume(returning: avAsset)
+            }
+        }
+    }
+    
     private func processHorizontalFrame(
         inputPixelBuffer: CVPixelBuffer,
         inputSize: CGSize,
@@ -526,6 +550,7 @@ class VideoProcessor {
 
 enum VideoProcessorError: Error, LocalizedError {
     case metalSetupFailed(String)
+    case failedToLoadAsset
     case noVideoTrack
     case noAudioTrack
     case readerFailed(String)
@@ -538,6 +563,8 @@ enum VideoProcessorError: Error, LocalizedError {
         switch self {
         case .metalSetupFailed(let message):
             return "Metal setup failed: \(message)"
+        case .failedToLoadAsset:
+            return "Failed to load asset"
         case .noVideoTrack:
             return "No video track found in input file"
         case .noAudioTrack:

@@ -1,15 +1,12 @@
 import SwiftUI
 import AVFoundation
 import AudioToolbox
-import UniformTypeIdentifiers
 import Photos
 import PhotosUI
 
 struct VideoInfo {
     let resolution: CGSize
     let duration: Double
-    let frameRate: Double
-    let format: String
 }
 
 enum NavigationDestination: Hashable {
@@ -110,7 +107,7 @@ enum OutputQuality: String, CaseIterable {
 
 struct ContentView: View {
     @State private var navigationPath = NavigationPath()
-    @State private var selectedVideoURL: URL?
+    @State private var selectedPHAsset: PHAsset?
     @State private var processingProgress: Float = 0.0
     @State private var processingCancelled: Bool = false
     @State private var processingError: String?
@@ -118,28 +115,30 @@ struct ContentView: View {
     @State private var processingStartTime = Date()
     @State private var selectedOrientation: Orientation = .horizontal
     @State private var selectedOutputQuality: OutputQuality = .k27
-    @State private var showingDocumentPicker = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showingPermissionAlert = false
     @State private var permissionAlertMessage = ""
     
     var body: some View {
         NavigationStack(path: $navigationPath) {
             FileSelectionView(
-                onSelectFile: {
-                    showingDocumentPicker = true
-                }
+                selectedPhotoItem: $selectedPhotoItem
             )
             .navigationDestination(for: NavigationDestination.self) { destination in
                 switch destination {
                 case .fileSelected:
                     FileSelectedView(
-                        videoInfo: videoInfo,
+                        videoInfo: $videoInfo,
                         selectedOrientation: $selectedOrientation,
                         selectedOutputQuality: $selectedOutputQuality,
                         onProcess: {
                             processAndSaveVideo()
                         }
                     )
+                    .onDisappear() {
+                        selectedPhotoItem = nil
+                        selectedPHAsset = nil
+                    }
                 case .processing:
                     ProcessingView(
                         processingProgress: processingProgress,
@@ -161,9 +160,9 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingDocumentPicker) {
-            DocumentPicker { url in
-                handleSelectedFile(url: url)
+        .onChange(of: selectedPhotoItem) {
+            if let selectedPhotoItem = selectedPhotoItem {
+                handleSelectedPhotoItem(item: selectedPhotoItem)
             }
         }
         .alert("Permission Required", isPresented: $showingPermissionAlert) {
@@ -178,91 +177,74 @@ struct ContentView: View {
         }
     }
     
-    private func handleSelectedFile(url: URL) {
-        selectedVideoURL = url
+    // Method to get PHAsset from PhotosPickerItem
+    private func getPHAsset(from item: PhotosPickerItem) async -> PHAsset? {
+        // Get the asset identifier from the PhotosPickerItem
+        guard let assetIdentifier = item.itemIdentifier else { return nil }
+        
+        // Fetch the PHAsset using the identifier
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        return fetchResult.firstObject
+    }
+    
+    private func handleSelectedPhotoItem(item: PhotosPickerItem) {
         processingError = nil
         processingProgress = 0.0
         processingCancelled = false
-        loadVideoInfo(from: url)
-        navigationPath.append(NavigationDestination.fileSelected)
-    }
-    
-    private func loadVideoInfo(from url: URL) {
-        Task {
-            do {
-                // Start accessing security-scoped resource
-                let accessing = url.startAccessingSecurityScopedResource()
-                defer {
-                    if accessing {
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-                
-                let asset = AVURLAsset(url: url)
-                guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { return }
-                
-                let naturalSize = try await videoTrack.load(.naturalSize)
-                let transform = try await videoTrack.load(.preferredTransform)
-                let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-                let duration = try await asset.load(.duration)
-                
-                // Get file extension for format display
-                let ext = url.pathExtension
-                
-                // Calculate actual dimensions considering transform
-                let transformedSize = naturalSize.applying(transform)
-                let inputSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
-                
-                await MainActor.run {
-                    self.videoInfo = VideoInfo(
-                        resolution: inputSize,
-                        duration: duration.seconds,
-                        frameRate: Double(nominalFrameRate),
-                        format: ext.uppercased()
-                    )
-                }
-            } catch {
-                await MainActor.run {
-                    self.processingError = "Failed to load video info: \(error.localizedDescription)"
-                }
-            }
+        
+        guard let assetIdentifier = item.itemIdentifier else { return }
+        selectedPHAsset = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil).firstObject
+        if let asset = selectedPHAsset {
+            videoInfo = VideoInfo(
+                resolution: CGSize(width: asset.pixelWidth, height: asset.pixelHeight),
+                duration: asset.duration
+            )
+        }
+
+        DispatchQueue.main.async {
+            navigationPath.append(NavigationDestination.fileSelected)
         }
     }
     
     private func processAndSaveVideo() {
-        guard let inputVideoURL = selectedVideoURL else { return }
+        guard let inputPHAsset = selectedPHAsset else { return }
         
         // Check photo library permission first
         checkPhotoLibraryPermission { granted in
             if granted {
-                self.startProcessing(inputURL: inputVideoURL)
+                self.startProcessing(inputAsset: inputPHAsset)
             } else {
-                self.permissionAlertMessage = "This app needs permission to save videos to your photo library. Please enable Photos access in Settings."
+                self.permissionAlertMessage = "This app needs permission to access and save videos to your photo library. Please enable Photos access in Settings."
                 self.showingPermissionAlert = true
             }
         }
     }
     
     private func checkPhotoLibraryPermission(completion: @escaping (Bool) -> Void) {
-        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        // Check both read and write permissions since we're using PHAssets
+        let readStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let writeStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
         
-        switch status {
-        case .authorized, .limited:
+        // We need read access to work with PHAssets and write access to save processed videos
+        let hasReadAccess = readStatus == .authorized || readStatus == .limited
+        let hasWriteAccess = writeStatus == .authorized || writeStatus == .limited
+        
+        if hasReadAccess && hasWriteAccess {
             completion(true)
-        case .denied, .restricted:
+        } else if readStatus == .denied || readStatus == .restricted || writeStatus == .denied || writeStatus == .restricted {
             completion(false)
-        case .notDetermined:
-            PHPhotoLibrary.requestAuthorization(for: .addOnly) { newStatus in
+        } else {
+            // Request read/write permission
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
                 DispatchQueue.main.async {
-                    completion(newStatus == .authorized || newStatus == .limited)
+                    let hasAccess = newStatus == .authorized || newStatus == .limited
+                    completion(hasAccess)
                 }
             }
-        @unknown default:
-            completion(false)
         }
     }
     
-    private func startProcessing(inputURL: URL) {
+    private func startProcessing(inputAsset: PHAsset) {
         navigationPath.append(NavigationDestination.processing)
         processingError = nil
         processingProgress = 0.0
@@ -270,11 +252,11 @@ struct ContentView: View {
         processingStartTime = Date()
         
         Task {
-            await self.processVideo(inputURL: inputURL)
+            await self.processVideo(inputAsset: inputAsset)
         }
     }
     
-    private func processVideo(inputURL: URL) async {
+    private func processVideo(inputAsset: PHAsset) async {
         do {
             // Create temporary output URL
             let tempDirectory = FileManager.default.temporaryDirectory
@@ -292,7 +274,7 @@ struct ContentView: View {
             )
             
             try await videoProcessor.convertVideo(
-                inputURL: inputURL,
+                inputAsset: inputAsset,
                 outputURL: outputURL,
                 isCancelled: { self.processingCancelled }
             ) { progress in
@@ -316,7 +298,7 @@ struct ContentView: View {
                 }
             }
             
-            // Clean up temp file
+            // Clean up temp files
             await MainActor.run {
                 try? FileManager.default.removeItem(at: outputURL)
             }
@@ -361,91 +343,51 @@ struct ContentView: View {
     }
 }
 
-struct DocumentPicker: UIViewControllerRepresentable {
-    let onFileSelected: (URL) -> Void
-    
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.movie, .video, .quickTimeMovie, .mpeg4Movie], asCopy: true)
-        picker.delegate = context.coordinator
-        picker.allowsMultipleSelection = false
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let parent: DocumentPicker
-        
-        init(_ parent: DocumentPicker) {
-            self.parent = parent
-        }
-        
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { return }
-            parent.onFileSelected(url)
-        }
-    }
-}
 
 struct FileSelectionView: View {
-    let onSelectFile: () -> Void
-    
+    @Binding var selectedPhotoItem: PhotosPickerItem?
+    @State private var showPicker = false
+
     var body: some View {
-        VStack(spacing: 30) {
-            VStack(spacing: 16) {
-                Image(systemName: "video.badge.plus")
-                    .font(.system(size: 60))
-                    .foregroundColor(.blue)
-                
-                Text("Select a Video File")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text("Choose a video file from your device to get started")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-            }
-            
-            VStack(spacing: 16) {
-                Button(action: onSelectFile) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "folder")
-                            .font(.title2)
-                        Text("Browse Files")
-                            .font(.headline)
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.blue, Color.blue.opacity(0.8)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .shadow(color: .blue.opacity(0.3), radius: 8, x: 0, y: 4)
+        ZStack {
+            Color.clear // stretch gesture area full screen
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 20, coordinateSpace: .local)
+                        .onEnded { value in
+                            if value.translation.height < 0 {
+                                showPicker = true
+                            }
+                        }
+                )
+
+            VStack(spacing: 30) {
+                VStack(spacing: 16) {
+                    Image(systemName: "video.badge.plus")
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
+                    
+                    Text("Select a Video File")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Text("Swipe up to open your Photos library and choose a video")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 }
-                
-                Text("Supports MP4, MOV, AVI and other video formats")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
             }
-            .padding(.horizontal)
         }
+        .photosPicker(isPresented: $showPicker,
+                      selection: $selectedPhotoItem,
+                      matching: .videos,
+                      photoLibrary: .shared())
     }
 }
 
 struct FileSelectedView: View {
-    let videoInfo: VideoInfo?
+    @Binding var videoInfo: VideoInfo?
     @Binding var selectedOrientation: Orientation
     @Binding var selectedOutputQuality: OutputQuality
     let onProcess: () -> Void
@@ -476,20 +418,7 @@ struct FileSelectedView: View {
                                 value: formatDuration(info.duration),
                                 color: .green
                             )
-                            
-                            VideoInfoCard(
-                                icon: "speedometer",
-                                title: "Frame Rate",
-                                value: "\(String(format: "%.0f", info.frameRate)) fps",
-                                color: .orange
-                            )
-                            
-                            VideoInfoCard(
-                                icon: "doc.fill",
-                                title: "Format",
-                                value: info.format,
-                                color: .purple
-                            )
+
                         }
                     }
                 }
