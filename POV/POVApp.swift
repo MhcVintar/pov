@@ -6,7 +6,7 @@ struct POVApp: App {
     
     var body: some Scene {
         WindowGroup {
-            RootView()
+            ContentView()
                 .environmentObject(appState)
         }
     }

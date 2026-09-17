@@ -20,7 +20,7 @@ struct SelectionView: View {
                 caption: "Select a video from your Photos library."
             )
 
-            ButtonComponent(appState.asset == nil ? "Open Library" : "Change Video") {
+            SelectionButton(appState.asset == nil ? "Open Library" : "Change Video") {
                 showPicker = true
             }
 
@@ -34,20 +34,17 @@ struct SelectionView: View {
 
                 HStack(spacing: 8) {
                     ForEach(Orientation.allCases, id: \.self) { orientation in
-                        ClickableCardComponent(data: ClickableCardData(
-                            color: orientation.color,
-                            icon: orientation.icon,
+                        OrientationCard(
+                            orientation: orientation,
                             isSelected: self.orientation == orientation,
-                            label: orientation.displayName,
-                            caption: orientation.description,
                             action: { self.orientation = orientation }
-                        ))
+                        )
                     }
                 }
             }
             .padding(.horizontal, 8)
 
-            ButtonComponent("Process") {
+            SelectionButton("Process") {
                 appState.navigationPath.append(NavigationDestination.processingView)
             }
             .disabled(appState.asset == nil)
@@ -108,4 +105,75 @@ struct SelectionView: View {
 
 #Preview {
     SelectionView(orientation: .constant(.horizontal))
+}
+
+private struct SelectionButton: View {
+    let label: String
+    let action: () -> Void
+
+    init(_ label: String, action: @escaping () -> Void) {
+        self.label = label
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .foregroundStyle(.white)
+                .font(.headline)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+        }
+        .background(.blue)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 8)
+    }
+}
+
+private struct OrientationCard: View {
+    let orientation: Orientation
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? orientation.color.opacity(0.15) : .clear)
+                    .strokeBorder(isSelected ? orientation.color : .secondary.opacity(0.5), lineWidth: 2)
+                    .frame(width: 60, height: 40)
+                    .overlay {
+                        Image(systemName: orientation.icon)
+                            .foregroundStyle(isSelected ? orientation.color : .secondary)
+                            .font(.title2)
+                    }
+
+                VStack(spacing: 2) {
+                    Text(orientation.displayName)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(isSelected ? orientation.color : .primary)
+
+                    Text(orientation.description)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? orientation.color.opacity(0.1) : Color(.systemBackground))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                isSelected ? orientation.color.opacity(0.5) : .secondary.opacity(0.5),
+                                lineWidth: isSelected ? 2 : 1,
+                            ),
+                    ),
+            )
+        }
+    }
 }

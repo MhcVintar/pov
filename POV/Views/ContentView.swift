@@ -1,8 +1,8 @@
 import SwiftUI
 
-struct RootView: View {
+struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    
+
     @State var orientation = Orientation.horizontal
 
     var body: some View {
@@ -36,5 +36,5 @@ enum NavigationDestination: Hashable {
 }
 
 #Preview {
-    RootView()
+    ContentView()
 }
