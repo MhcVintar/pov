@@ -5,9 +5,8 @@ import SwiftUI
 struct ProcessingView: View {
     @EnvironmentObject var appState: AppState
     
-    // TODO: can these not be bindings?
+    // TODO: can this not be a binding?
     @Binding var orientation: Orientation
-    @Binding var quality: Quality
 
     private let startTime = Date()
     @State private var progress = 0.0
@@ -22,10 +21,6 @@ struct ProcessingView: View {
             
             VStack(spacing: 8) {
                 Text("Orientation: \(orientation.displayName)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                Text("Quality: \(quality.displayName)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -114,8 +109,7 @@ struct ProcessingView: View {
         try await appState.videoService!.processVideo(
             inputAsset: appState.asset!,
             outputURL: tmpURL,
-            orientation: orientation,
-            quality: quality
+            orientation: orientation
         ) { newProgress in
                 progress = newProgress
         }

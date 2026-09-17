@@ -5,10 +5,8 @@ class VideoService {
     private let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let textureCache: CVMetalTextureCache
-    private let textureSampler: MTLSamplerState
     private let horizontalPipelineState: MTLComputePipelineState
     private let verticalPipelineState: MTLComputePipelineState
-    private let downscalePipelineState: MTLComputePipelineState
     private let cropPipelineState: MTLComputePipelineState
 
     init() throws {
@@ -31,19 +29,7 @@ class VideoService {
             throw AppError.fatalError("Failed to create a texture cache.")
         }
         self.textureCache = textureCache
-        
-        // Create texture sampler
-        let samplerDescriptor = MTLSamplerDescriptor()
-        samplerDescriptor.normalizedCoordinates = true
-        samplerDescriptor.minFilter = .linear
-        samplerDescriptor.sAddressMode = .clampToEdge
-        samplerDescriptor.tAddressMode = .clampToEdge
-        
-        guard let textureSampler = metalDevice.makeSamplerState(descriptor: samplerDescriptor) else {
-            throw AppError.fatalError("Failed to create a texture sampler.")
-        }
-        self.textureSampler = textureSampler
-        
+
         // Create pipeline states
         guard let metalLibrary = metalDevice.makeDefaultLibrary() else {
             throw AppError.fatalError("Failed to create metal library.")
@@ -58,11 +44,6 @@ class VideoService {
             metalDevice: metalDevice,
             metalLibrary: metalLibrary,
             functionName: "vertical"
-        )
-        downscalePipelineState = try Self.getPipelineState(
-            metalDevice: metalDevice,
-            metalLibrary: metalLibrary,
-            functionName: "downscale"
         )
         cropPipelineState = try Self.getPipelineState(
             metalDevice: metalDevice,
@@ -87,7 +68,6 @@ class VideoService {
         inputAsset: AVAsset,
         outputURL: URL,
         orientation: Orientation,
-        quality: Quality,
         progressCallback: @escaping (Double) -> Void
     ) async throws {
         // Load video and audio tracks
@@ -113,9 +93,9 @@ class VideoService {
         
         let outputSize: CGSize = switch orientation {
         case .horizontal:
-            quality.size16by9
+            Self.evenSize(height: metadata.resolution.height, aspectWidth: 16, aspectHeight: 9)
         case .vertical:
-            quality.size9by16
+            Self.evenSize(height: metadata.resolution.height, aspectWidth: 9, aspectHeight: 16)
         }
         
         let outputBitRate = metadata.bitRate * (outputSize.width * outputSize.height) / (metadata.resolution.width * metadata.resolution.height)
@@ -168,7 +148,7 @@ class VideoService {
         )
         
         // Setup pixel buffer pools
-        let pixelBufferPools = try getPixelBufferPools(orientation: orientation, quality: quality)
+        let pixelBufferPools = try getPixelBufferPools(orientation: orientation, inputResolution: metadata.resolution)
         
         // Start reading and writing
         guard reader.startReading() else {
@@ -200,13 +180,13 @@ class VideoService {
                         try await self.processHorizontalFrame(
                             inputPixelBuffer: inputPixelBuffer,
                             pixelBufferPools: pixelBufferPools,
-                            quality: quality
+                            inputResolution: metadata.resolution
                         )
                     case .vertical:
                         try await self.processVerticalFrame(
                             inputPixelBuffer: inputPixelBuffer,
                             pixelBufferPools: pixelBufferPools,
-                            quality: quality
+                            inputResolution: metadata.resolution
                         )
                     }
                     
@@ -268,33 +248,28 @@ class VideoService {
         }
     }
     
+    private static func evenSize(height: CGFloat, aspectWidth: CGFloat, aspectHeight: CGFloat) -> CGSize {
+        let evenHeight = (height / 2).rounded() * 2
+        let width = (evenHeight * aspectWidth / aspectHeight / 2).rounded() * 2
+        return CGSize(width: width, height: evenHeight)
+    }
+
     private func getPixelBufferPools(
         orientation: Orientation,
-        quality: Quality
+        inputResolution: CGSize
     ) throws -> [CGSize: CVPixelBufferPool] {
         let sizes = switch orientation {
         case .horizontal:
             [
-                CGSize(
-                    width: quality.size16by9.height / 3 * 4,
-                    height: quality.size16by9.height
-                ),
-                quality.size16by9
+                Self.evenSize(height: inputResolution.height, aspectWidth: 16, aspectHeight: 9)
             ]
         case .vertical:
             [
-                CGSize(
-                    width: quality.size4by3.width,
-                    height: quality.size4by3.height
-                ),
-                CGSize(
-                    width: quality.size4by3.height / 8 * 5,
-                    height: quality.size4by3.height
-                ),
-                quality.size9by16
+                Self.evenSize(height: inputResolution.height, aspectWidth: 5, aspectHeight: 8),
+                Self.evenSize(height: inputResolution.height, aspectWidth: 9, aspectHeight: 16)
             ]
         }
-        
+
         var pools: [CGSize: CVPixelBufferPool] = [:]
         
         for size in sizes {
@@ -321,65 +296,36 @@ class VideoService {
     private func processHorizontalFrame(
         inputPixelBuffer: CVPixelBuffer,
         pixelBufferPools: [CGSize: CVPixelBufferPool],
-        quality: Quality
+        inputResolution: CGSize
     ) async throws -> CVPixelBuffer {
-        let intermediateSize = CGSize(
-            width: quality.size16by9.height / 3 * 4,
-            height: quality.size16by9.height
+        let outputSize = Self.evenSize(height: inputResolution.height, aspectWidth: 16, aspectHeight: 9)
+        guard let pixelBufferPool = pixelBufferPools[outputSize] else {
+            throw AppError.recoverableError("Failed to get pixel buffer pool.")
+        }
+        return try await processFrameWithShader(
+            inputPixelBuffer: inputPixelBuffer,
+            pixelBufferPool: pixelBufferPool,
+            pipelineState: horizontalPipelineState,
         )
-        guard let pixelBufferPool = pixelBufferPools[intermediateSize] else {
+    }
+
+    private func processVerticalFrame(
+        inputPixelBuffer: CVPixelBuffer,
+        pixelBufferPools: [CGSize: CVPixelBufferPool],
+        inputResolution: CGSize
+    ) async throws -> CVPixelBuffer {
+        let cropSize = Self.evenSize(height: inputResolution.height, aspectWidth: 5, aspectHeight: 8)
+        guard let pixelBufferPool = pixelBufferPools[cropSize] else {
             throw AppError.recoverableError("Failed to get pixel buffer pool.")
         }
         let intermeidatePixelBuffer = try await processFrameWithShader(
             inputPixelBuffer: inputPixelBuffer,
             pixelBufferPool: pixelBufferPool,
-            pipelineState: downscalePipelineState,
-            useSampler: true
-        )
-        
-        guard let pixelBufferPool = pixelBufferPools[quality.size16by9] else {
-            throw AppError.recoverableError("Failed to get pixel buffer pool.")
-        }
-        return try await processFrameWithShader(
-            inputPixelBuffer: intermeidatePixelBuffer,
-            pixelBufferPool: pixelBufferPool,
-            pipelineState: horizontalPipelineState,
-        )
-    }
-    
-    private func processVerticalFrame(
-        inputPixelBuffer: CVPixelBuffer,
-        pixelBufferPools: [CGSize: CVPixelBufferPool],
-        quality: Quality
-    ) async throws -> CVPixelBuffer {
-        var intermediateSize = CGSize(
-            width: quality.size4by3.width,
-            height: quality.size4by3.height
-        )
-        guard let pixelBufferPool = pixelBufferPools[intermediateSize] else {
-            throw AppError.recoverableError("Failed to get pixel buffer pool.")
-        }
-        var intermeidatePixelBuffer = try await processFrameWithShader(
-            inputPixelBuffer: inputPixelBuffer,
-            pixelBufferPool: pixelBufferPool,
-            pipelineState: downscalePipelineState,
-            useSampler: true
-        )
-
-        intermediateSize = CGSize(
-            width: quality.size4by3.height / 8 * 5,
-            height: quality.size4by3.height
-        )
-        guard let pixelBufferPool = pixelBufferPools[intermediateSize] else {
-            throw AppError.recoverableError("Failed to get pixel buffer pool.")
-        }
-        intermeidatePixelBuffer = try await processFrameWithShader(
-            inputPixelBuffer: intermeidatePixelBuffer,
-            pixelBufferPool: pixelBufferPool,
             pipelineState: cropPipelineState,
         )
 
-        guard let pixelBufferPool = pixelBufferPools[quality.size9by16] else {
+        let outputSize = Self.evenSize(height: inputResolution.height, aspectWidth: 9, aspectHeight: 16)
+        guard let pixelBufferPool = pixelBufferPools[outputSize] else {
             throw AppError.recoverableError("Failed to get pixel buffer pool.")
         }
         return try await processFrameWithShader(
@@ -392,8 +338,7 @@ class VideoService {
     private func processFrameWithShader(
         inputPixelBuffer: CVPixelBuffer,
         pixelBufferPool: CVPixelBufferPool,
-        pipelineState: MTLComputePipelineState,
-        useSampler: Bool = false
+        pipelineState: MTLComputePipelineState
     ) async throws -> CVPixelBuffer {
         // Create input textures
         guard let inputYTexture = createTexture(from: inputPixelBuffer, plain: .y),
@@ -426,10 +371,7 @@ class VideoService {
         encoder.setTexture(inputUVTexture, index: 1)
         encoder.setTexture(outputYTexture, index: 2)
         encoder.setTexture(outputUVTexture, index: 3)
-        if useSampler {
-            encoder.setSamplerState(textureSampler, index: 0)
-        }
-        
+
         // Calculate thread groups based on output Y texture size
         let threadsPerThreadgroup = MTLSize(width: 16, height: 16, depth: 1)
         let threadgroupsPerGrid = MTLSize(
