@@ -7,6 +7,11 @@ class VideoProcessor {
     private static let nearestSamplerFilterKey = "CISamplerFilterMode"
     private static let nearestSamplerFilterValue = "CISamplerFilterNearest"
 
+    // Shown to the user for any processing failure below — the specific AVFoundation/
+    // Core Image failure reason isn't actionable for them, so we keep one plain message
+    // rather than surfacing framework-internal text.
+    private static let processingFailureMessage = "Something went wrong while processing your video. Please try again."
+
     // Shared by the reader output and the writer's pixel buffer adaptor so
     // both ends of the pipeline agree on the pixel format.
     private static let pixelBufferAttributes: [String: Any] = [
@@ -80,10 +85,10 @@ class VideoProcessor {
         )
 
         guard let videoTrack else {
-            throw AppError.recoverableError("Failed to load video track.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
         guard let audioTrack else {
-            throw AppError.recoverableError("Failed to load audio track.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         // Prepare metadata
@@ -142,16 +147,16 @@ class VideoProcessor {
 
         // Start reading and writing
         guard reader.startReading() else {
-            throw AppError.recoverableError(reader.error?.localizedDescription ?? "Unknown reader error.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         guard writer.startWriting() else {
-            throw AppError.recoverableError(writer.error?.localizedDescription ?? "Unknown writer error.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
         writer.startSession(atSourceTime: .zero)
 
         guard let pixelBufferPool = pixelBufferAdaptor.pixelBufferPool else {
-            throw AppError.recoverableError("Failed to get pixel buffer pool from the writer input adaptor.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         // Process the frames
@@ -166,7 +171,7 @@ class VideoProcessor {
 
                 if let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() {
                     guard let inputPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                        throw AppError.recoverableError("Failed to convert sample buffer to image buffer.")
+                        throw AppError.recoverableError(Self.processingFailureMessage)
                     }
 
                     let outputPixelBuffer = try processFrame(
@@ -180,7 +185,7 @@ class VideoProcessor {
 
                     let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                     if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
-                        throw AppError.recoverableError("Failed to append pixel buffer at time: \(presentationTime).")
+                        throw AppError.recoverableError(Self.processingFailureMessage)
                     }
 
                     processedFrames += 1
@@ -202,8 +207,7 @@ class VideoProcessor {
 
                 if let sampleBuffer = audioReaderOutput.copyNextSampleBuffer() {
                     if !audioWriterInput.append(sampleBuffer) {
-                        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                        throw AppError.recoverableError("Failed to append audio sample at time: \(presentationTime).")
+                        throw AppError.recoverableError(Self.processingFailureMessage)
                     }
                 } else {
                     audioWriterInput.markAsFinished()
@@ -226,12 +230,12 @@ class VideoProcessor {
         // Finish writing
         await writer.finishWriting()
 
-        if let error = reader.error {
-            throw AppError.recoverableError(error.localizedDescription)
+        if reader.error != nil {
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
-        if let error = writer.error {
-            throw AppError.recoverableError(error.localizedDescription)
+        if writer.error != nil {
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
     }
 
@@ -243,7 +247,7 @@ class VideoProcessor {
 
     private static func getMetadata(from asset: AVAsset) async throws -> Metadata {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw AppError.recoverableError("Failed to load video track")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         let (
@@ -266,7 +270,7 @@ class VideoProcessor {
         let resolution = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
 
         guard let creationDate = creationDate else {
-            throw AppError.recoverableError("Failed to load creation date")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         return Metadata(
@@ -310,7 +314,7 @@ class VideoProcessor {
         let result = CVPixelBufferPoolCreatePixelBuffer(nil, pixelBufferPool, &outputPixelBuffer)
 
         guard result == kCVReturnSuccess, let outputBuffer = outputPixelBuffer else {
-            throw AppError.recoverableError("Failed to create output pixel buffer.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         // Carry over color space/transfer function attachments so the
@@ -331,7 +335,7 @@ class VideoProcessor {
             roiCallback: { _, _ in inputImage.extent },
             arguments: [sampler, Float(inputSize.width), Float(outputSize.width)]
         ) else {
-            throw AppError.recoverableError("Failed to apply the horizontal warp kernel.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         return warpedImage
@@ -358,7 +362,7 @@ class VideoProcessor {
                 Float(outputSize.width), Float(outputSize.height)
             ]
         ) else {
-            throw AppError.recoverableError("Failed to apply the vertical warp kernel.")
+            throw AppError.recoverableError(Self.processingFailureMessage)
         }
 
         return warpedImage

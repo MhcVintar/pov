@@ -16,5 +16,15 @@ class AppState: ObservableObject {
             self.error = error
         }
     }
+
+    // Fatal errors are handled by ContentView switching its whole body to ErrorView,
+    // so only recoverable ones need to be routed to the errorView destination here.
+    func present(_ error: Error) {
+        self.error = error
+
+        if AppError.isRecoverable(error) {
+            navigationPath.append(NavigationDestination.errorView)
+        }
+    }
 }
 

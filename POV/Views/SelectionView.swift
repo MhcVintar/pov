@@ -8,19 +8,13 @@ struct SelectionView: View {
 
     @State private var showPicker = false
     @State private var photoItem: PhotosPickerItem?
+    @State private var thumbnail: UIImage?
 
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
 
-            InfoComponent(
-                icon: "video.badge.plus",
-                iconColor: .blue,
-                title: "Select a Video",
-                caption: "Select a video from your Photos library."
-            )
-
-            SelectionButton(appState.asset == nil ? "Open Library" : "Change Video") {
+            VideoPickerCard(thumbnail: thumbnail) {
                 showPicker = true
             }
 
@@ -34,11 +28,29 @@ struct SelectionView: View {
 
                 HStack(spacing: 8) {
                     ForEach(Orientation.allCases, id: \.self) { orientation in
-                        OrientationCard(
-                            orientation: orientation,
-                            isSelected: self.orientation == orientation,
-                            action: { self.orientation = orientation }
-                        )
+                        let isSelected = self.orientation == orientation
+
+                        Button {
+                            self.orientation = orientation
+                        } label: {
+                            Text(orientation.displayName)
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(isSelected ? Color.blue : .primary)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: SelectionButton.height * 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(isSelected ? Color.blue.opacity(0.1) : Color(.systemBackground))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(
+                                                    isSelected ? Color.blue.opacity(0.5) : .secondary.opacity(0.5),
+                                                    lineWidth: isSelected ? 2 : 1
+                                                )
+                                        )
+                                )
+                        }
                     }
                 }
             }
@@ -59,13 +71,22 @@ struct SelectionView: View {
             guard let item = newItem else { return }
 
             Task {
-                let asset = try await LibraryManager.loadAsset(from: item)
+                do {
+                    let asset = try await LibraryManager.loadAsset(from: item)
 
-                // TODO: make sure the asset is a 4:3
+                    // TODO: make sure the asset is a 4:3
 
-                await MainActor.run {
-                    self.photoItem = nil
-                    self.appState.asset = asset
+                    let thumbnail = await LibraryManager.thumbnail(for: asset)
+
+                    await MainActor.run {
+                        self.photoItem = nil
+                        self.appState.asset = asset
+                        self.thumbnail = thumbnail
+                    }
+                } catch {
+                    await MainActor.run {
+                        appState.present(error)
+                    }
                 }
             }
         }
@@ -76,7 +97,61 @@ struct SelectionView: View {
     SelectionView(orientation: .constant(.horizontal))
 }
 
+private struct VideoPickerCard: View {
+    let thumbnail: UIImage?
+    let action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Button(action: action) {
+                Group {
+                    if let thumbnail {
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        VStack(spacing: 12) {
+                            Image(systemName: "video.badge.plus")
+                                .font(.system(size: 40))
+                                .foregroundStyle(.blue)
+
+                            Text("Tap to select a video")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 220)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color(.secondarySystemBackground))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(
+                            thumbnail == nil ? Color.secondary.opacity(0.4) : Color.clear,
+                            style: StrokeStyle(lineWidth: 2, dash: thumbnail == nil ? [8] : [])
+                        )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+
+            if thumbnail != nil {
+                Button("Change Video", action: action)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+}
+
 private struct SelectionButton: View {
+    static let height: CGFloat = 52
+
     let label: String
     let action: () -> Void
 
@@ -92,57 +167,10 @@ private struct SelectionButton: View {
                 .font(.headline)
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
+                .frame(height: Self.height)
         }
         .background(.blue)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 8)
-    }
-}
-
-private struct OrientationCard: View {
-    let orientation: Orientation
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? orientation.color.opacity(0.15) : .clear)
-                    .strokeBorder(isSelected ? orientation.color : .secondary.opacity(0.5), lineWidth: 2)
-                    .frame(width: 60, height: 40)
-                    .overlay {
-                        Image(systemName: orientation.icon)
-                            .foregroundStyle(isSelected ? orientation.color : .secondary)
-                            .font(.title2)
-                    }
-
-                VStack(spacing: 2) {
-                    Text(orientation.displayName)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(isSelected ? orientation.color : .primary)
-
-                    Text(orientation.description)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundStyle(Color.secondary)
-                }
-            }
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? orientation.color.opacity(0.1) : Color(.systemBackground))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(
-                                isSelected ? orientation.color.opacity(0.5) : .secondary.opacity(0.5),
-                                lineWidth: isSelected ? 2 : 1,
-                            ),
-                    ),
-            )
-        }
     }
 }

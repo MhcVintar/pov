@@ -50,12 +50,6 @@ struct ProcessingView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-            
-            Text("Make sure to stay on current screen")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
         }
         .padding(30)
         .onAppear {
@@ -69,7 +63,7 @@ struct ProcessingView: View {
                         appState.navigationPath = NavigationPath([NavigationDestination.completionView])
                     }
                 } catch {
-                    appState.error = error
+                    appState.present(error)
                 }
             }
         }
@@ -90,11 +84,11 @@ struct ProcessingView: View {
         let remaining = estimated - elapsed
         
         if remaining < 60 {
-            return String(format: "~%.0f sec remaining", remaining)
+            return String(format: "%.0f sec remaining", remaining)
         } else {
             let minutes = Int(remaining) / 60
             let seconds = Int(remaining) % 60
-            return String(format: "~%d:%02d remaining", minutes, seconds)
+            return String(format: "%d:%02d remaining", minutes, seconds)
         }
     }
     
