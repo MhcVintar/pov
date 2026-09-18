@@ -1,5 +1,4 @@
 import AVFoundation
-import Photos
 import SwiftUI
 
 struct ProcessingView: View {
@@ -106,7 +105,7 @@ struct ProcessingView: View {
         let dateString = dateFormatter.string(from: Date())
         let tmpURL = tempDirectory.appendingPathComponent("pov_\(dateString).MOV")
         
-        try await appState.videoService!.processVideo(
+        try await appState.videoProcessor!.processVideo(
             inputAsset: appState.asset!,
             outputURL: tmpURL,
             orientation: orientation
@@ -116,10 +115,8 @@ struct ProcessingView: View {
         
         if !Task.isCancelled {
             // TODO: add permissions check / request
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: tmpURL)
-            }
-            
+            try await LibraryManager.saveVideo(at: tmpURL)
+
             AudioServicesPlayAlertSoundWithCompletion(1016, nil)
             AudioServicesPlaySystemSoundWithCompletion(kSystemSoundID_Vibrate, nil)
         }

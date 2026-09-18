@@ -2,17 +2,17 @@ import SwiftUI
 import AVFoundation
 
 class AppState: ObservableObject {
-    let videoService: VideoService?
-    
+    let videoProcessor: VideoProcessor?
+
     @Published var navigationPath = NavigationPath()
     @Published var asset: AVAsset?
     @Published var error: Error?
-    
+
     init() {
         do {
-            videoService = try VideoService()
+            videoProcessor = try VideoProcessor()
         } catch {
-            videoService = nil
+            videoProcessor = nil
             self.error = error
         }
     }

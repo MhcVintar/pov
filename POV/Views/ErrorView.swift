@@ -20,12 +20,13 @@ struct ErrorView: View {
                 icon: "exclamationmark.octagon",
                 iconColor: .red,
                 title: "Fatal Error Occurred",
-                caption: "\(error.localizedDescription) Please close the app any try again."
+                caption: "Please close the app any try again."
             )
         }
     }
 }
 
 #Preview {
-    ErrorView(AppError.fatalError("Some error occurred."))
+    //ErrorView(AppError.recoverableError("Some error occurred."))
+    ErrorView(AppError.fatalError)
 }

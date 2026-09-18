@@ -1,7 +1,7 @@
 import AVFoundation
 import CoreImage
 
-class VideoService {
+class VideoProcessor {
     // Forces point sampling in the warp kernels below, matching the original
     // shader's exact pixel copies instead of Core Image's default interpolation.
     private static let nearestSamplerFilterKey = "CISamplerFilterMode"
@@ -54,12 +54,12 @@ class VideoService {
         context = CIContext()
 
         guard let horizontalWarpKernel = CIKernel(source: Self.horizontalWarpSource) else {
-            throw AppError.fatalError("Failed to create horizontal warp kernel.")
+            throw AppError.fatalError
         }
         self.horizontalWarpKernel = horizontalWarpKernel
 
         guard let verticalWarpKernel = CIKernel(source: Self.verticalWarpSource) else {
-            throw AppError.fatalError("Failed to create vertical warp kernel.")
+            throw AppError.fatalError
         }
         self.verticalWarpKernel = verticalWarpKernel
     }
