@@ -7,6 +7,13 @@ class VideoService {
     private static let nearestSamplerFilterKey = "CISamplerFilterMode"
     private static let nearestSamplerFilterValue = "CISamplerFilterNearest"
 
+    // Shared by the reader output and the writer's pixel buffer adaptor so
+    // both ends of the pipeline agree on the pixel format.
+    private static let pixelBufferAttributes: [String: Any] = [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+        kCVPixelBufferMetalCompatibilityKey as String: true
+    ]
+
     private let context: CIContext
     private let horizontalWarpKernel: CIKernel
     private let verticalWarpKernel: CIKernel
@@ -96,14 +103,7 @@ class VideoService {
         // Setup reader
         let reader = try AVAssetReader(asset: inputAsset)
 
-        // Shared with the pixel buffer adaptor below so both ends of the
-        // pipeline agree on the pixel format without restating it twice.
-        let pixelBufferAttributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-            kCVPixelBufferMetalCompatibilityKey as String: true
-        ]
-
-        let videoReaderOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: pixelBufferAttributes)
+        let videoReaderOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: Self.pixelBufferAttributes)
         reader.add(videoReaderOutput)
 
         let audioReaderOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
@@ -137,7 +137,7 @@ class VideoService {
         // videoWriterInput's own outputSettings (AVVideoWidthKey/HeightKey) above.
         let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoWriterInput,
-            sourcePixelBufferAttributes: pixelBufferAttributes
+            sourcePixelBufferAttributes: Self.pixelBufferAttributes
         )
 
         // Start reading and writing
@@ -174,7 +174,8 @@ class VideoService {
                         pixelBufferPool: pixelBufferPool,
                         orientation: orientation,
                         outputSize: outputSize,
-                        inputResolution: metadata.resolution
+                        inputResolution: metadata.resolution,
+                        inputTransform: metadata.transform
                     )
 
                     let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
@@ -272,6 +273,7 @@ class VideoService {
             creationDate: creationDate,
             duration: duration,
             resolution: resolution,
+            transform: transform,
             frameRate: Double(frameRate),
             bitRate: Double(bitRate),
         )
@@ -282,9 +284,20 @@ class VideoService {
         pixelBufferPool: CVPixelBufferPool,
         orientation: Orientation,
         outputSize: CGSize,
-        inputResolution: CGSize
+        inputResolution: CGSize,
+        inputTransform: CGAffineTransform
     ) throws -> CVPixelBuffer {
+        // insertingIntermediate() forces Core Image to render the rotation into
+        // a real intermediate buffer here, rather than fusing the transform
+        // lazily into the custom kernels' samplers below — that fusion made
+        // ROI negotiation with the hand-written kernels blow up and stall
+        // frame processing. samplingNearest() keeps that render an exact pixel
+        // copy, matching the nearest-neighbor sampling forced everywhere else
+        // in this file, instead of Core Image's default interpolation.
         let inputImage = CIImage(cvPixelBuffer: inputPixelBuffer)
+            .transformed(by: inputTransform)
+            .samplingNearest()
+            .insertingIntermediate()
 
         let outputImage: CIImage = switch orientation {
         case .horizontal:
