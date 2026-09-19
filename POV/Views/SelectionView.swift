@@ -1,5 +1,5 @@
-import SwiftUI
 import PhotosUI
+import SwiftUI
 
 struct SelectionView: View {
     @EnvironmentObject var appState: AppState
@@ -66,7 +66,8 @@ struct SelectionView: View {
             isPresented: $showPicker,
             selection: $photoItem,
             matching: .videos,
-            photoLibrary: .shared())
+            photoLibrary: .shared()
+        )
         .onChange(of: photoItem) { _, newItem in
             guard let item = newItem else { return }
 

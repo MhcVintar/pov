@@ -19,7 +19,7 @@ enum LibraryManager {
 
     static func loadAsset(from item: PhotosPickerItem) async throws -> AVAsset {
         guard let assetIdentifier = item.itemIdentifier else {
-            throw AppError.recoverableError(Self.loadFailureMessage)
+            throw AppError.recoverableError(loadFailureMessage)
         }
 
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
@@ -49,7 +49,7 @@ enum LibraryManager {
 
     private static func validateIsFourThree(_ asset: AVAsset) async throws {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw AppError.recoverableError(Self.loadFailureMessage)
+            throw AppError.recoverableError(loadFailureMessage)
         }
 
         let (naturalSize, transform) = try await (videoTrack.load(.naturalSize), videoTrack.load(.preferredTransform))
@@ -68,7 +68,7 @@ enum LibraryManager {
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
             }
         } catch {
-            throw AppError.recoverableError(Self.saveFailureMessage)
+            throw AppError.recoverableError(saveFailureMessage)
         }
     }
 

@@ -28,5 +28,5 @@ struct ErrorView: View {
 
 #Preview {
     ErrorView(AppError.recoverableError("Some error occurred."))
-    //ErrorView(AppError.fatalError)
+    // ErrorView(AppError.fatalError)
 }

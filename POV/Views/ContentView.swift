@@ -19,7 +19,7 @@ struct ContentView: View {
                             CompletionView()
                         case .errorView:
                             ErrorView(appState.error!)
-                                .onDisappear() {
+                                .onDisappear {
                                     appState.error = nil
                                 }
                         }

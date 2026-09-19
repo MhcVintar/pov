@@ -1,0 +1,12 @@
+[tools]
+swiftformat = "latest"
+swiftlint   = "latest"
+
+[tasks.format]
+run = "swiftformat ."
+
+[tasks.lint]
+run = "swiftlint"
+
+[tasks.default]
+depends = ["format", "lint"]

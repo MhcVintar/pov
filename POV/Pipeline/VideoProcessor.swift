@@ -7,16 +7,16 @@ class VideoProcessor {
     private static let nearestSamplerFilterKey = "CISamplerFilterMode"
     private static let nearestSamplerFilterValue = "CISamplerFilterNearest"
 
-    // Shown to the user for any processing failure below — the specific AVFoundation/
-    // Core Image failure reason isn't actionable for them, so we keep one plain message
-    // rather than surfacing framework-internal text.
+    /// Shown to the user for any processing failure below — the specific AVFoundation/
+    /// Core Image failure reason isn't actionable for them, so we keep one plain message
+    /// rather than surfacing framework-internal text.
     private static let processingFailureMessage = "Something went wrong while processing your video. Please try again."
 
-    // Shared by the reader output and the writer's pixel buffer adaptor so
-    // both ends of the pipeline agree on the pixel format.
+    /// Shared by the reader output and the writer's pixel buffer adaptor so
+    /// both ends of the pipeline agree on the pixel format.
     private static let pixelBufferAttributes: [String: Any] = [
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-        kCVPixelBufferMetalCompatibilityKey as String: true
+        kCVPixelBufferMetalCompatibilityKey as String: true,
     ]
 
     private let context: CIContext
@@ -138,7 +138,7 @@ class VideoProcessor {
                 AVVideoAverageBitRateKey: outputBitRate,
                 AVVideoProfileLevelKey: "HEVC_Main10_AutoLevel",
                 AVVideoExpectedSourceFrameRateKey: metadata.frameRate,
-            ]
+            ],
         ])
         videoWriterInput.expectsMediaDataInRealTime = false
         writer.add(videoWriterInput)
@@ -171,7 +171,7 @@ class VideoProcessor {
         // Process the frames
         var processedFrames = 0
         var lastProgress = 0.0
-        while reader.status == .reading && !Task.isCancelled {
+        while reader.status == .reading, !Task.isCancelled {
             var shouldWait = true
 
             // Process video
@@ -263,7 +263,7 @@ class VideoProcessor {
 
     private static func getMetadata(from asset: AVAsset) async throws -> Metadata {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            throw AppError.recoverableError(processingFailureMessage)
         }
 
         let (
@@ -272,14 +272,14 @@ class VideoProcessor {
             naturalSize,
             transform,
             frameRate,
-            bitRate,
+            bitRate
         ) = try await (
             asset.load(.creationDate),
             asset.load(.duration),
             videoTrack.load(.naturalSize),
             videoTrack.load(.preferredTransform),
             videoTrack.load(.nominalFrameRate),
-            videoTrack.load(.estimatedDataRate),
+            videoTrack.load(.estimatedDataRate)
         )
 
         let transformedSize = naturalSize.applying(transform)
@@ -295,7 +295,7 @@ class VideoProcessor {
             resolution: resolution,
             transform: transform,
             frameRate: Double(frameRate),
-            bitRate: Double(bitRate),
+            bitRate: Double(bitRate)
         )
     }
 
@@ -385,7 +385,7 @@ class VideoProcessor {
             arguments: [
                 sampler,
                 Float(cropSize.width), Float(cropSize.height),
-                Float(outputSize.width), Float(outputSize.height)
+                Float(outputSize.width), Float(outputSize.height),
             ]
         ) else {
             throw AppError.recoverableError(Self.processingFailureMessage)

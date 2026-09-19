@@ -1,5 +1,5 @@
-import SwiftUI
 import AVFoundation
+import SwiftUI
 
 class AppState: ObservableObject {
     let videoProcessor: VideoProcessor?
@@ -17,8 +17,8 @@ class AppState: ObservableObject {
         }
     }
 
-    // Fatal errors are handled by ContentView switching its whole body to ErrorView,
-    // so only recoverable ones need to be routed to the errorView destination here.
+    /// Fatal errors are handled by ContentView switching its whole body to ErrorView,
+    /// so only recoverable ones need to be routed to the errorView destination here.
     func present(_ error: Error) {
         self.error = error
 
@@ -27,4 +27,3 @@ class AppState: ObservableObject {
         }
     }
 }
-

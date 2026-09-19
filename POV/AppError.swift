@@ -12,12 +12,12 @@ enum AppError: Error, LocalizedError {
             nil
         }
     }
-    
+
     static func isRecoverable(_ error: Error) -> Bool {
         guard let appError = error as? AppError else {
             return false
         }
-        
+
         if case .recoverableError = appError {
             return true
         }
