@@ -6,14 +6,11 @@ struct InfoComponent: View {
     let title: String
     let caption: String
 
-    @State private var isIconEffectActive = true
-
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 60))
                 .foregroundStyle(iconColor)
-                .symbolEffect(.drawOn.individually, options: .nonRepeating, isActive: isIconEffectActive)
 
             Text(title)
                 .font(.title)
@@ -22,14 +19,6 @@ struct InfoComponent: View {
             Text(caption)
                 .font(.callout)
                 .multilineTextAlignment(.center)
-        }
-        .onAppear {
-            isIconEffectActive = false
-        }
-        .onDisappear {
-            // Reset so a re-appearance (e.g. the same view identity reused) has a
-            // true -> false transition to animate again, instead of a no-op.
-            isIconEffectActive = true
         }
     }
 }

@@ -74,8 +74,6 @@ struct SelectionView: View {
                 do {
                     let asset = try await LibraryManager.loadAsset(from: item)
 
-                    // TODO: make sure the asset is a 4:3
-
                     let thumbnail = await LibraryManager.thumbnail(for: asset)
 
                     await MainActor.run {
@@ -85,6 +83,9 @@ struct SelectionView: View {
                     }
                 } catch {
                     await MainActor.run {
+                        self.photoItem = nil
+                        self.appState.asset = nil
+                        self.thumbnail = nil
                         appState.present(error)
                     }
                 }
@@ -104,38 +105,36 @@ private struct VideoPickerCard: View {
     var body: some View {
         VStack(spacing: 10) {
             Button(action: action) {
-                Group {
-                    if let thumbnail {
-                        Image(uiImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        VStack(spacing: 12) {
-                            Image(systemName: "video.badge.plus")
-                                .font(.system(size: 40))
-                                .foregroundStyle(.blue)
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(.secondarySystemBackground))
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(4 / 3, contentMode: .fit)
+                    .overlay {
+                        if let thumbnail {
+                            Image(uiImage: thumbnail)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                        } else {
+                            VStack(spacing: 12) {
+                                Image(systemName: "video.badge.plus")
+                                    .font(.system(size: 40))
+                                    .foregroundStyle(.blue)
 
-                            Text("Tap to select a video")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                Text("Tap to select a video")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 220)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(.secondarySystemBackground))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(
-                            thumbnail == nil ? Color.secondary.opacity(0.4) : Color.clear,
-                            style: StrokeStyle(lineWidth: 2, dash: thumbnail == nil ? [8] : [])
-                        )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .strokeBorder(
+                                thumbnail == nil ? Color.secondary.opacity(0.4) : Color.clear,
+                                style: StrokeStyle(lineWidth: 2, dash: thumbnail == nil ? [8] : [])
+                            )
+                    )
             }
             .buttonStyle(.plain)
 

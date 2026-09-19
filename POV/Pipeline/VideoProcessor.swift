@@ -96,9 +96,18 @@ class VideoProcessor {
 
         let totalFrames = metadata.duration.seconds * metadata.frameRate
 
+        // The horizontal warp kernel's shape is tuned against a 16:9 canvas at the
+        // input's native height, but the output width must match the input's own
+        // width rather than growing/shrinking to fit that canvas — horizontalWarpWidth
+        // carries that 16:9-at-native-height width down to processHorizontalFrame so
+        // it can pre-scale the input by the same ratio before warping, keeping the
+        // warp's shape while landing back on the input's width.
+        let horizontalWarpWidth = Self.evenSize(height: metadata.resolution.height, aspectWidth: 16, aspectHeight: 9).width
+
         let outputSize: CGSize = switch orientation {
         case .horizontal:
-            Self.evenSize(height: metadata.resolution.height, aspectWidth: 16, aspectHeight: 9)
+            // Full input width, height cropped down to 16:9.
+            Self.evenSize(width: metadata.resolution.width, aspectWidth: 16, aspectHeight: 9)
         case .vertical:
             Self.evenSize(height: metadata.resolution.height, aspectWidth: 9, aspectHeight: 16)
         }
@@ -180,7 +189,8 @@ class VideoProcessor {
                         orientation: orientation,
                         outputSize: outputSize,
                         inputResolution: metadata.resolution,
-                        inputTransform: metadata.transform
+                        inputTransform: metadata.transform,
+                        horizontalWarpWidth: horizontalWarpWidth
                     )
 
                     let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
@@ -245,6 +255,12 @@ class VideoProcessor {
         return CGSize(width: width, height: evenHeight)
     }
 
+    private static func evenSize(width: CGFloat, aspectWidth: CGFloat, aspectHeight: CGFloat) -> CGSize {
+        let evenWidth = (width / 2).rounded() * 2
+        let height = (evenWidth * aspectHeight / aspectWidth / 2).rounded() * 2
+        return CGSize(width: evenWidth, height: height)
+    }
+
     private static func getMetadata(from asset: AVAsset) async throws -> Metadata {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw AppError.recoverableError(Self.processingFailureMessage)
@@ -289,7 +305,8 @@ class VideoProcessor {
         orientation: Orientation,
         outputSize: CGSize,
         inputResolution: CGSize,
-        inputTransform: CGAffineTransform
+        inputTransform: CGAffineTransform,
+        horizontalWarpWidth: CGFloat
     ) throws -> CVPixelBuffer {
         // insertingIntermediate() forces Core Image to render the rotation into
         // a real intermediate buffer here, rather than fusing the transform
@@ -305,7 +322,7 @@ class VideoProcessor {
 
         let outputImage: CIImage = switch orientation {
         case .horizontal:
-            try processHorizontalFrame(inputImage: inputImage, outputSize: outputSize)
+            try processHorizontalFrame(inputImage: inputImage, inputResolution: inputResolution, outputSize: outputSize, warpWidth: horizontalWarpWidth)
         case .vertical:
             try processVerticalFrame(inputImage: inputImage, inputResolution: inputResolution, outputSize: outputSize)
         }
@@ -326,13 +343,22 @@ class VideoProcessor {
         return outputBuffer
     }
 
-    private func processHorizontalFrame(inputImage: CIImage, outputSize: CGSize) throws -> CIImage {
-        let inputSize = inputImage.extent.size
-        let sampler = CISampler(image: inputImage, options: [Self.nearestSamplerFilterKey: Self.nearestSamplerFilterValue])
+    private func processHorizontalFrame(inputImage: CIImage, inputResolution: CGSize, outputSize: CGSize, warpWidth: CGFloat) throws -> CIImage {
+        // Horizontally, pre-scale by the same ratio the warp used to stretch by
+        // (inputWidth -> warpWidth), so the warp's shape is unchanged but it now
+        // lands back on outputSize.width (the input's own width) instead of warpWidth.
+        // Vertically, downscale directly to outputSize.height — the kernel passes y
+        // through unchanged, so once the source height already matches outputSize.height
+        // no cropping is needed; the whole frame is kept, just compressed to fit 16:9.
+        let horizontalScale = outputSize.width / warpWidth
+        let verticalScale = outputSize.height / inputResolution.height
+        let scaledImage = inputImage.transformed(by: CGAffineTransform(scaleX: horizontalScale, y: verticalScale))
+        let inputSize = scaledImage.extent.size
+        let sampler = CISampler(image: scaledImage, options: [Self.nearestSamplerFilterKey: Self.nearestSamplerFilterValue])
 
         guard let warpedImage = horizontalWarpKernel.apply(
             extent: CGRect(origin: .zero, size: outputSize),
-            roiCallback: { _, _ in inputImage.extent },
+            roiCallback: { _, _ in scaledImage.extent },
             arguments: [sampler, Float(inputSize.width), Float(outputSize.width)]
         ) else {
             throw AppError.recoverableError(Self.processingFailureMessage)

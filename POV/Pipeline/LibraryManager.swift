@@ -10,6 +10,12 @@ enum LibraryManager {
     // rather than surfacing framework-internal text.
     private static let loadFailureMessage = "Couldn't load the selected video. Please try a different one."
     private static let saveFailureMessage = "Couldn't save the processed video to your Photos library. Please try again."
+    private static let aspectRatioFailureMessage = "This app only supports 4:3 videos. Please select a different one."
+
+    // The processing pipeline (crop ratios, warp math) assumes 4:3 source footage,
+    // so anything else is rejected up front rather than producing a malformed result.
+    private static let expectedAspectRatio = 4.0 / 3.0
+    private static let aspectRatioTolerance = 0.01
 
     static func loadAsset(from item: PhotosPickerItem) async throws -> AVAsset {
         guard let assetIdentifier = item.itemIdentifier else {
@@ -21,7 +27,7 @@ enum LibraryManager {
             throw AppError.recoverableError(Self.loadFailureMessage)
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
+        let avAsset: AVAsset = try await withCheckedThrowingContinuation { continuation in
             let options = PHVideoRequestOptions()
             options.version = .original
             options.deliveryMode = .highQualityFormat
@@ -34,6 +40,25 @@ enum LibraryManager {
 
                 continuation.resume(returning: avAsset)
             }
+        }
+
+        try await Self.validateIsFourThree(avAsset)
+
+        return avAsset
+    }
+
+    private static func validateIsFourThree(_ asset: AVAsset) async throws {
+        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw AppError.recoverableError(Self.loadFailureMessage)
+        }
+
+        let (naturalSize, transform) = try await (videoTrack.load(.naturalSize), videoTrack.load(.preferredTransform))
+        let resolution = naturalSize.applying(transform)
+        let width = abs(resolution.width)
+        let height = abs(resolution.height)
+
+        guard height > 0, abs(width / height - Self.expectedAspectRatio) < Self.aspectRatioTolerance else {
+            throw AppError.recoverableError(Self.aspectRatioFailureMessage)
         }
     }
 
