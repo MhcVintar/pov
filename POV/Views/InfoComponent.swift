@@ -11,11 +11,11 @@ struct InfoComponent: View {
             Image(systemName: icon)
                 .font(.system(size: 60))
                 .foregroundStyle(iconColor)
-            
+
             Text(title)
                 .font(.title)
                 .fontWeight(.bold)
-            
+
             Text(caption)
                 .font(.callout)
                 .multilineTextAlignment(.center)
