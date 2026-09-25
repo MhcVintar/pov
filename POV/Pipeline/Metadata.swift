@@ -1,8 +1,7 @@
-import AVFoundation
 import CoreGraphics
+import CoreMedia
 
 struct Metadata {
-    let creationDate: AVMetadataItem
     let duration: CMTime
     let resolution: CGSize
     let transform: CGAffineTransform

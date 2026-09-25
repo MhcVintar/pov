@@ -1,16 +1,13 @@
 import AVFoundation
 import CoreImage
 
-class VideoProcessor {
+// CIContext and CIKernel are immutable once created and are documented as thread-safe,
+// so it's safe to share a VideoProcessor instance across concurrency domains.
+final class VideoProcessor: @unchecked Sendable {
     // Forces point sampling in the warp kernels below, matching the original
     // shader's exact pixel copies instead of Core Image's default interpolation.
     private static let nearestSamplerFilterKey = "CISamplerFilterMode"
     private static let nearestSamplerFilterValue = "CISamplerFilterNearest"
-
-    /// Shown to the user for any processing failure below — the specific AVFoundation/
-    /// Core Image failure reason isn't actionable for them, so we keep one plain message
-    /// rather than surfacing framework-internal text.
-    private static let processingFailureMessage = "Something went wrong while processing your video. Please try again."
 
     /// Shared by the reader output and the writer's pixel buffer adaptor so
     /// both ends of the pipeline agree on the pixel format.
@@ -55,16 +52,16 @@ class VideoProcessor {
     }
     """
 
-    init() throws {
+    init() {
         context = CIContext()
 
         guard let horizontalWarpKernel = CIKernel(source: Self.horizontalWarpSource) else {
-            throw AppError.fatalError
+            fatalError("Failed to compile horizontal warp kernel")
         }
         self.horizontalWarpKernel = horizontalWarpKernel
 
         guard let verticalWarpKernel = CIKernel(source: Self.verticalWarpSource) else {
-            throw AppError.fatalError
+            fatalError("Failed to compile vertical warp kernel")
         }
         self.verticalWarpKernel = verticalWarpKernel
     }
@@ -85,10 +82,10 @@ class VideoProcessor {
         )
 
         guard let videoTrack else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Input asset has no video track")
         }
         guard let audioTrack else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Input asset has no audio track")
         }
 
         // Prepare metadata
@@ -156,16 +153,16 @@ class VideoProcessor {
 
         // Start reading and writing
         guard reader.startReading() else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Failed to start asset reader: \(reader.error?.localizedDescription ?? "unknown error")")
         }
 
         guard writer.startWriting() else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Failed to start asset writer: \(writer.error?.localizedDescription ?? "unknown error")")
         }
         writer.startSession(atSourceTime: .zero)
 
         guard let pixelBufferPool = pixelBufferAdaptor.pixelBufferPool else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Pixel buffer adaptor has no pixel buffer pool")
         }
 
         // Process the frames
@@ -180,10 +177,10 @@ class VideoProcessor {
 
                 if let sampleBuffer = videoReaderOutput.copyNextSampleBuffer() {
                     guard let inputPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                        throw AppError.recoverableError(Self.processingFailureMessage)
+                        fatalError("Video sample buffer has no image buffer")
                     }
 
-                    let outputPixelBuffer = try processFrame(
+                    let outputPixelBuffer = processFrame(
                         inputPixelBuffer: inputPixelBuffer,
                         pixelBufferPool: pixelBufferPool,
                         orientation: orientation,
@@ -194,8 +191,8 @@ class VideoProcessor {
                     )
 
                     let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                    if !pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) {
-                        throw AppError.recoverableError(Self.processingFailureMessage)
+                    guard pixelBufferAdaptor.append(outputPixelBuffer, withPresentationTime: presentationTime) else {
+                        fatalError("Failed to append video frame to writer")
                     }
 
                     processedFrames += 1
@@ -216,8 +213,8 @@ class VideoProcessor {
                 shouldWait = false
 
                 if let sampleBuffer = audioReaderOutput.copyNextSampleBuffer() {
-                    if !audioWriterInput.append(sampleBuffer) {
-                        throw AppError.recoverableError(Self.processingFailureMessage)
+                    guard audioWriterInput.append(sampleBuffer) else {
+                        fatalError("Failed to append audio buffer to writer")
                     }
                 } else {
                     audioWriterInput.markAsFinished()
@@ -240,12 +237,12 @@ class VideoProcessor {
         // Finish writing
         await writer.finishWriting()
 
-        if reader.error != nil {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+        if let error = reader.error {
+            fatalError("Asset reader failed: \(error)")
         }
 
-        if writer.error != nil {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+        if let error = writer.error {
+            fatalError("Asset writer failed: \(error)")
         }
     }
 
@@ -263,18 +260,16 @@ class VideoProcessor {
 
     private static func getMetadata(from asset: AVAsset) async throws -> Metadata {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw AppError.recoverableError(processingFailureMessage)
+            fatalError("Input asset has no video track")
         }
 
         let (
-            creationDate,
             duration,
             naturalSize,
             transform,
             frameRate,
             bitRate
         ) = try await (
-            asset.load(.creationDate),
             asset.load(.duration),
             videoTrack.load(.naturalSize),
             videoTrack.load(.preferredTransform),
@@ -285,12 +280,7 @@ class VideoProcessor {
         let transformedSize = naturalSize.applying(transform)
         let resolution = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
 
-        guard let creationDate = creationDate else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
-        }
-
         return Metadata(
-            creationDate: creationDate,
             duration: duration,
             resolution: resolution,
             transform: transform,
@@ -307,7 +297,7 @@ class VideoProcessor {
         inputResolution: CGSize,
         inputTransform: CGAffineTransform,
         horizontalWarpWidth: CGFloat
-    ) throws -> CVPixelBuffer {
+    ) -> CVPixelBuffer {
         // insertingIntermediate() forces Core Image to render the rotation into
         // a real intermediate buffer here, rather than fusing the transform
         // lazily into the custom kernels' samplers below — that fusion made
@@ -322,16 +312,16 @@ class VideoProcessor {
 
         let outputImage: CIImage = switch orientation {
         case .horizontal:
-            try processHorizontalFrame(inputImage: inputImage, inputResolution: inputResolution, outputSize: outputSize, warpWidth: horizontalWarpWidth)
+            processHorizontalFrame(inputImage: inputImage, inputResolution: inputResolution, outputSize: outputSize, warpWidth: horizontalWarpWidth)
         case .vertical:
-            try processVerticalFrame(inputImage: inputImage, inputResolution: inputResolution, outputSize: outputSize)
+            processVerticalFrame(inputImage: inputImage, inputResolution: inputResolution, outputSize: outputSize)
         }
 
         var outputPixelBuffer: CVPixelBuffer?
         let result = CVPixelBufferPoolCreatePixelBuffer(nil, pixelBufferPool, &outputPixelBuffer)
 
         guard result == kCVReturnSuccess, let outputBuffer = outputPixelBuffer else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Failed to create pixel buffer from pool (CVReturn \(result))")
         }
 
         // Carry over color space/transfer function attachments so the
@@ -343,7 +333,7 @@ class VideoProcessor {
         return outputBuffer
     }
 
-    private func processHorizontalFrame(inputImage: CIImage, inputResolution: CGSize, outputSize: CGSize, warpWidth: CGFloat) throws -> CIImage {
+    private func processHorizontalFrame(inputImage: CIImage, inputResolution: CGSize, outputSize: CGSize, warpWidth: CGFloat) -> CIImage {
         // Horizontally, pre-scale by the same ratio the warp used to stretch by
         // (inputWidth -> warpWidth), so the warp's shape is unchanged but it now
         // lands back on outputSize.width (the input's own width) instead of warpWidth.
@@ -361,13 +351,13 @@ class VideoProcessor {
             roiCallback: { _, _ in scaledImage.extent },
             arguments: [sampler, Float(inputSize.width), Float(outputSize.width)]
         ) else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Horizontal warp kernel failed to apply")
         }
 
         return warpedImage
     }
 
-    private func processVerticalFrame(inputImage: CIImage, inputResolution: CGSize, outputSize: CGSize) throws -> CIImage {
+    private func processVerticalFrame(inputImage: CIImage, inputResolution: CGSize, outputSize: CGSize) -> CIImage {
         // Crop to a centered 5:8 rect, matching the previous crop shader pass
         let cropSize = Self.evenSize(height: inputResolution.height, aspectWidth: 5, aspectHeight: 8)
         let cropOrigin = CGPoint(
@@ -388,7 +378,7 @@ class VideoProcessor {
                 Float(outputSize.width), Float(outputSize.height),
             ]
         ) else {
-            throw AppError.recoverableError(Self.processingFailureMessage)
+            fatalError("Vertical warp kernel failed to apply")
         }
 
         return warpedImage

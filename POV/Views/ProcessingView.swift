@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 struct ProcessingView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     private let startTime = Date()
     @State private var progress = 0.0
@@ -63,14 +63,15 @@ struct ProcessingView: View {
                 do {
                     try await processVideo()
                     if !Task.isCancelled {
-                        await MainActor.run {
-                            task = nil
-                            appState.navigationPath = NavigationPath([NavigationDestination.completionView])
-                        }
+                        task = nil
+                        appState.navigationPath = NavigationPath([NavigationDestination.completionView])
                     }
                 } catch {
-                    task = nil
-                    appState.present(error)
+                    // Cancelling (Stop button, or navigating away) can surface as a thrown
+                    // CancellationError from within the processing loop — that's expected
+                    // and already handled by the cancellation check above, not a failure.
+                    guard !Task.isCancelled else { return }
+                    fatalError("Video processing failed: \(error)")
                 }
             }
         }
@@ -141,14 +142,18 @@ struct ProcessingView: View {
     }
 
     private func processVideo() async throws {
+        guard let selectedVideo = appState.selectedVideo else {
+            fatalError("ProcessingView appeared without a selected video")
+        }
+
         let tempDirectory = FileManager.default.temporaryDirectory
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
         let dateString = dateFormatter.string(from: Date())
         let tmpURL = tempDirectory.appendingPathComponent("pov_\(dateString).MOV")
 
-        try await appState.videoProcessor!.processVideo(
-            inputAsset: appState.selectedVideo!.asset,
+        try await appState.videoProcessor.processVideo(
+            inputAsset: selectedVideo.asset,
             outputURL: tmpURL,
             orientation: appState.orientation
         ) { newProgress in
@@ -172,18 +177,16 @@ struct ProcessingView: View {
         let duration = try await outputAsset.load(.duration)
         let thumbnail = await thumbnailTask
 
-        await MainActor.run {
-            appState.outputVideo = OutputVideo(
-                url: tmpURL,
-                thumbnail: thumbnail,
-                duration: duration.seconds,
-                orientation: appState.orientation
-            )
-        }
+        appState.outputVideo = OutputVideo(
+            url: tmpURL,
+            thumbnail: thumbnail,
+            duration: duration.seconds,
+            orientation: appState.orientation
+        )
     }
 }
 
 #Preview {
     ProcessingView()
-        .environmentObject(AppState())
+        .environment(AppState())
 }

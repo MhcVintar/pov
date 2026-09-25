@@ -1,16 +1,16 @@
 import AVFoundation
 import Photos
 import PhotosUI
-import SwiftUI
 import UIKit
+import SwiftUI
+
+/// Thrown when the picked video can't be used (wrong aspect ratio, unreadable, or
+/// otherwise not a supported clip) — the one failure the app recovers from, by
+/// showing an inline message on the selection screen. Any other failure is treated
+/// as unexpected and crashes the app instead.
+struct WrongFileFormatError: Error {}
 
 enum LibraryManager {
-    // Shown to the user for any failure below — the specific Photos/AVFoundation
-    // failure reason isn't actionable for them, so we keep one plain message
-    // rather than surfacing framework-internal text.
-    private static let loadFailureMessage = "Couldn't load the selected video. Please try a different one."
-    private static let saveFailureMessage = "Couldn't save the processed video to your Photos library. Please try again."
-
     // The processing pipeline (crop ratios, warp math) assumes 4:3 source footage,
     // so anything else is rejected up front rather than producing a malformed result.
     private static let expectedAspectRatio = 4.0 / 3.0
@@ -23,12 +23,12 @@ enum LibraryManager {
 
     static func loadAsset(from item: PhotosPickerItem) async throws -> LoadedVideo {
         guard let assetIdentifier = item.itemIdentifier else {
-            throw AppError.recoverableError(loadFailureMessage)
+            throw WrongFileFormatError()
         }
 
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
         guard let phAsset = fetchResult.firstObject else {
-            throw AppError.recoverableError(Self.loadFailureMessage)
+            throw WrongFileFormatError()
         }
 
         let avAsset: AVAsset = try await withCheckedThrowingContinuation { continuation in
@@ -38,7 +38,7 @@ enum LibraryManager {
 
             PHImageManager.default().requestAVAsset(forVideo: phAsset, options: options) { avAsset, _, info in
                 guard let avAsset, info?[PHImageErrorKey] == nil else {
-                    continuation.resume(throwing: AppError.recoverableError(Self.loadFailureMessage))
+                    continuation.resume(throwing: WrongFileFormatError())
                     return
                 }
 
@@ -55,7 +55,7 @@ enum LibraryManager {
 
     private static func validateIsFourThree(_ asset: AVAsset) async throws {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-            throw AppError.recoverableError(loadFailureMessage)
+            throw WrongFileFormatError()
         }
 
         let (naturalSize, transform) = try await (videoTrack.load(.naturalSize), videoTrack.load(.preferredTransform))
@@ -64,17 +64,13 @@ enum LibraryManager {
         let height = abs(resolution.height)
 
         guard height > 0, abs(width / height - Self.expectedAspectRatio) < Self.aspectRatioTolerance else {
-            throw AppError.wrongAspectRatio
+            throw WrongFileFormatError()
         }
     }
 
     static func saveVideo(at url: URL) async throws {
-        do {
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-            }
-        } catch {
-            throw AppError.recoverableError(saveFailureMessage)
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
         }
     }
 

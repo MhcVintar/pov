@@ -1,38 +1,26 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     var body: some View {
-        if let error = appState.error, !AppError.isRecoverable(error) {
-            ErrorView(error)
-        } else {
-            NavigationStack(path: $appState.navigationPath) {
-                SelectionView()
-                    .navigationDestination(for: NavigationDestination.self) { destination in
-                        switch destination {
-                        case .processingView:
-                            ProcessingView()
-                        case .completionView:
-                            CompletionView()
-                        case .errorView:
-                            ErrorView(appState.error!)
-                                .onDisappear {
-                                    appState.error = nil
-                                }
-                        }
+        @Bindable var appState = appState
+
+        NavigationStack(path: $appState.navigationPath) {
+            SelectionView()
+                .navigationDestination(for: NavigationDestination.self) { destination in
+                    switch destination {
+                    case .processingView:
+                        ProcessingView()
+                    case .completionView:
+                        CompletionView()
                     }
-            }
+                }
         }
     }
 }
 
-enum NavigationDestination: Hashable {
-    case processingView
-    case completionView
-    case errorView
-}
-
 #Preview {
     ContentView()
+        .environment(AppState())
 }

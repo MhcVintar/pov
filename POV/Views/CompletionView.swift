@@ -2,7 +2,7 @@ import AVKit
 import SwiftUI
 
 struct CompletionView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     @State private var player: AVPlayer?
 
@@ -18,6 +18,7 @@ struct CompletionView: View {
                             .foregroundStyle(Color.accent)
                             .frame(width: 44, height: 44)
                     }
+                    .accessibilityLabel("Share video")
                 }
             }
 
@@ -85,6 +86,7 @@ struct CompletionView: View {
                                         .foregroundStyle(Color.overlayContent)
                                 }
                         }
+                        .accessibilityLabel("Play video")
                     }
                 }
             }
@@ -97,5 +99,5 @@ struct CompletionView: View {
 
 #Preview {
     CompletionView()
-        .environmentObject(AppState())
+        .environment(AppState())
 }
