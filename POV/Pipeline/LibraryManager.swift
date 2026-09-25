@@ -10,14 +10,18 @@ enum LibraryManager {
     // rather than surfacing framework-internal text.
     private static let loadFailureMessage = "Couldn't load the selected video. Please try a different one."
     private static let saveFailureMessage = "Couldn't save the processed video to your Photos library. Please try again."
-    private static let aspectRatioFailureMessage = "This app only supports 4:3 videos. Please select a different one."
 
     // The processing pipeline (crop ratios, warp math) assumes 4:3 source footage,
     // so anything else is rejected up front rather than producing a malformed result.
     private static let expectedAspectRatio = 4.0 / 3.0
     private static let aspectRatioTolerance = 0.01
 
-    static func loadAsset(from item: PhotosPickerItem) async throws -> AVAsset {
+    struct LoadedVideo {
+        let asset: AVAsset
+        let fileName: String
+    }
+
+    static func loadAsset(from item: PhotosPickerItem) async throws -> LoadedVideo {
         guard let assetIdentifier = item.itemIdentifier else {
             throw AppError.recoverableError(loadFailureMessage)
         }
@@ -44,7 +48,9 @@ enum LibraryManager {
 
         try await Self.validateIsFourThree(avAsset)
 
-        return avAsset
+        let fileName = PHAssetResource.assetResources(for: phAsset).first?.originalFilename ?? "Video"
+
+        return LoadedVideo(asset: avAsset, fileName: fileName)
     }
 
     private static func validateIsFourThree(_ asset: AVAsset) async throws {
@@ -58,7 +64,7 @@ enum LibraryManager {
         let height = abs(resolution.height)
 
         guard height > 0, abs(width / height - Self.expectedAspectRatio) < Self.aspectRatioTolerance else {
-            throw AppError.recoverableError(Self.aspectRatioFailureMessage)
+            throw AppError.wrongAspectRatio
         }
     }
 

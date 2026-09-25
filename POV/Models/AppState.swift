@@ -5,7 +5,9 @@ class AppState: ObservableObject {
     let videoProcessor: VideoProcessor?
 
     @Published var navigationPath = NavigationPath()
-    @Published var asset: AVAsset?
+    @Published var orientation: Orientation = .horizontal
+    @Published var selectedVideo: SelectedVideo?
+    @Published var outputVideo: OutputVideo?
     @Published var error: Error?
 
     init() {
@@ -25,5 +27,13 @@ class AppState: ObservableObject {
         if AppError.isRecoverable(error) {
             navigationPath.append(NavigationDestination.errorView)
         }
+    }
+
+    /// Returns to the selection screen with no video picked, keeping the last chosen orientation.
+    func reset() {
+        selectedVideo = nil
+        outputVideo?.cleanUp()
+        outputVideo = nil
+        navigationPath = NavigationPath()
     }
 }

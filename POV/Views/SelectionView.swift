@@ -1,67 +1,47 @@
+import AVKit
 import PhotosUI
 import SwiftUI
 
 struct SelectionView: View {
     @EnvironmentObject var appState: AppState
 
-    @Binding var orientation: Orientation
-
     @State private var showPicker = false
     @State private var photoItem: PhotosPickerItem?
-    @State private var thumbnail: UIImage?
+    @State private var isLoading = false
+    @State private var showWrongAspectRatio = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
+        VStack(alignment: .leading, spacing: 28) {
+            videoArea
 
-            VideoPickerCard(thumbnail: thumbnail) {
-                showPicker = true
+            VStack(alignment: .leading, spacing: 12) {
+                Text("OUTPUT")
+                    .font(.footnote.weight(.semibold))
+                    .tracking(1.04)
+                    .foregroundStyle(Color.textSecondary)
+
+                OrientationControl(orientation: $appState.orientation)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            VStack(spacing: 14) {
-                Text("Orientation")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 14)
+            VStack(spacing: 12) {
+                if let hint {
+                    Text(hint)
+                        .font(.footnote)
+                        .foregroundStyle(Color.textSecondary)
+                        .frame(maxWidth: .infinity)
+                }
 
-                HStack(spacing: 8) {
-                    ForEach(Orientation.allCases, id: \.self) { orientation in
-                        let isSelected = self.orientation == orientation
-
-                        Button {
-                            self.orientation = orientation
-                        } label: {
-                            Text(orientation.displayName)
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(isSelected ? Color.blue : .primary)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: SelectionButton.height * 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(isSelected ? Color.blue.opacity(0.1) : Color(.systemBackground))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(
-                                                    isSelected ? Color.blue.opacity(0.5) : .secondary.opacity(0.5),
-                                                    lineWidth: isSelected ? 2 : 1
-                                                )
-                                        )
-                                )
-                        }
-                    }
+                PrimaryButton(title: "Continue to processing", isEnabled: appState.selectedVideo != nil) {
+                    appState.navigationPath.append(NavigationDestination.processingView)
                 }
             }
-            .padding(.horizontal, 8)
-
-            SelectionButton("Process") {
-                appState.navigationPath.append(NavigationDestination.processingView)
-            }
-            .disabled(appState.asset == nil)
-            .opacity(appState.asset == nil ? 0.5 : 1)
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+        .padding(.bottom, 8)
+        .background(Color.appBackground.ignoresSafeArea())
         .photosPicker(
             isPresented: $showPicker,
             selection: $photoItem,
@@ -70,25 +50,76 @@ struct SelectionView: View {
         )
         .onChange(of: photoItem) { _, newItem in
             guard let item = newItem else { return }
+            selectVideo(from: item)
+        }
+    }
 
-            Task {
-                do {
-                    let asset = try await LibraryManager.loadAsset(from: item)
+    private var hint: String? {
+        appState.selectedVideo == nil ? "Select a 4:3 video to continue" : nil
+    }
 
-                    let thumbnail = await LibraryManager.thumbnail(for: asset)
-
-                    await MainActor.run {
-                        self.photoItem = nil
-                        self.appState.asset = asset
-                        self.thumbnail = thumbnail
+    @ViewBuilder
+    private var videoArea: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Group {
+                if isLoading {
+                    LoadingVideoBox()
+                } else if let video = appState.selectedVideo {
+                    SelectedVideoBox(
+                        video: video,
+                        onReplace: { showPicker = true }
+                    )
+                } else {
+                    EmptyVideoBox(isError: showWrongAspectRatio) {
+                        showPicker = true
                     }
-                } catch {
-                    await MainActor.run {
-                        self.photoItem = nil
-                        self.appState.asset = nil
-                        self.thumbnail = nil
-                        appState.present(error)
-                    }
+                }
+            }
+
+            if showWrongAspectRatio {
+                Text("The video needs to be 4:3. Please choose a different one.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.red)
+            }
+        }
+    }
+
+    private func selectVideo(from item: PhotosPickerItem) {
+        isLoading = true
+        showWrongAspectRatio = false
+
+        Task {
+            do {
+                let loaded = try await LibraryManager.loadAsset(from: item)
+
+                async let thumbnailTask = LibraryManager.thumbnail(for: loaded.asset)
+                let duration = try await loaded.asset.load(.duration)
+                let thumbnail = await thumbnailTask
+
+                await MainActor.run {
+                    photoItem = nil
+                    isLoading = false
+                    appState.selectedVideo = SelectedVideo(
+                        asset: loaded.asset,
+                        fileName: loaded.fileName,
+                        thumbnail: thumbnail,
+                        duration: duration.seconds
+                    )
+                }
+            } catch AppError.wrongAspectRatio {
+                await MainActor.run {
+                    photoItem = nil
+                    isLoading = false
+                    appState.selectedVideo = nil
+                    showWrongAspectRatio = true
+                }
+            } catch {
+                await MainActor.run {
+                    photoItem = nil
+                    isLoading = false
+                    appState.selectedVideo = nil
+                    showWrongAspectRatio = false
+                    appState.present(error)
                 }
             }
         }
@@ -96,81 +127,126 @@ struct SelectionView: View {
 }
 
 #Preview {
-    SelectionView(orientation: .constant(.horizontal))
+    SelectionView()
+        .environmentObject(AppState())
 }
 
-private struct VideoPickerCard: View {
-    let thumbnail: UIImage?
-    let action: () -> Void
+/// The 4:3 box shown before a video is picked, and again (in its error styling)
+/// after a wrong-aspect-ratio pick.
+private struct EmptyVideoBox: View {
+    let isError: Bool
+    let onTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
-            Button(action: action) {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(.secondarySystemBackground))
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(4 / 3, contentMode: .fit)
-                    .overlay {
-                        if let thumbnail {
+        Button(action: onTap) {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.surface)
+                .aspectRatio(4 / 3, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .strokeBorder(
+                            isError ? Color.red : Color.borderDashed,
+                            style: StrokeStyle(lineWidth: 1.5, dash: [6])
+                        )
+                )
+                .overlay {
+                    VStack(spacing: 14) {
+                        Image(systemName: "video.badge.plus")
+                            .font(.system(size: 40))
+                            .foregroundStyle(Color.accent)
+
+                        VStack(spacing: 4) {
+                            Text("Select a 4:3 video")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(Color.textPrimary)
+
+                            Text("From your Photos library")
+                                .font(.footnote)
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct LoadingVideoBox: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 20)
+            .fill(Color.surface)
+            .aspectRatio(4 / 3, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                ProgressView()
+                    .tint(Color.accent)
+            }
+    }
+}
+
+private struct SelectedVideoBox: View {
+    let video: SelectedVideo
+    let onReplace: () -> Void
+
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Group {
+                if let player {
+                    VideoPlayer(player: player)
+                } else {
+                    Group {
+                        if let thumbnail = video.thumbnail {
                             Image(uiImage: thumbnail)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
                         } else {
-                            VStack(spacing: 12) {
-                                Image(systemName: "video.badge.plus")
-                                    .font(.system(size: 40))
-                                    .foregroundStyle(.blue)
-
-                                Text("Tap to select a video")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Color.surface
                         }
                     }
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .strokeBorder(
-                                thumbnail == nil ? Color.secondary.opacity(0.4) : Color.clear,
-                                style: StrokeStyle(lineWidth: 2, dash: thumbnail == nil ? [8] : [])
-                            )
-                    )
+                    .overlay(alignment: .bottomLeading) {
+                        DurationBadge(duration: video.duration)
+                            .padding(12)
+                    }
+                    .overlay {
+                        Button {
+                            player = AVPlayer(playerItem: AVPlayerItem(asset: video.asset))
+                            player?.play()
+                        } label: {
+                            Circle()
+                                .fill(Color.overlay.opacity(0.6))
+                                .frame(width: 64, height: 64)
+                                .overlay {
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 24))
+                                        .foregroundStyle(Color.overlayContent)
+                                }
+                        }
+                    }
+                }
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(4 / 3, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 20))
 
-            if thumbnail != nil {
-                Button("Change Video", action: action)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+            HStack {
+                Text(video.fileName)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer()
+
+                Button("Replace", action: onReplace)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.textPrimary)
+                    .padding(.horizontal, 16)
+                    .frame(height: 44)
+                    .background(Color.chip, in: Capsule())
             }
         }
-        .padding(.horizontal, 8)
-    }
-}
-
-private struct SelectionButton: View {
-    static let height: CGFloat = 52
-
-    let label: String
-    let action: () -> Void
-
-    init(_ label: String, action: @escaping () -> Void) {
-        self.label = label
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            Text(label)
-                .foregroundStyle(.white)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity)
-                .frame(height: Self.height)
-        }
-        .background(.blue)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 8)
     }
 }

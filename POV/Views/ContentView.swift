@@ -3,18 +3,16 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
 
-    @State var orientation = Orientation.horizontal
-
     var body: some View {
         if let error = appState.error, !AppError.isRecoverable(error) {
             ErrorView(error)
         } else {
             NavigationStack(path: $appState.navigationPath) {
-                SelectionView(orientation: $orientation)
+                SelectionView()
                     .navigationDestination(for: NavigationDestination.self) { destination in
                         switch destination {
                         case .processingView:
-                            ProcessingView(orientation: $orientation)
+                            ProcessingView()
                         case .completionView:
                             CompletionView()
                         case .errorView:

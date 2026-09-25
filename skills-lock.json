@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "skills": {
+    "swift-development": {
+      "source": "sammcj/agentic-coding",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "Skills/swift-development/SKILL.md",
+      "computedHash": "251694ebdede032ca28b473342f1f1518989b4f30aa1522fae8dcb07468bb986"
+    },
+    "swiftui-pro": {
+      "source": "twostraws/swiftui-agent-skill",
+      "sourceType": "github",
+      "skillPath": "swiftui-pro/SKILL.md",
+      "computedHash": "07033426e384295a4b49cf0b2ffdefd4098cae4af53fef16bc1f2d9281118c41"
+    }
+  }
+}
